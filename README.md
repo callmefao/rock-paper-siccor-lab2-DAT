@@ -4,9 +4,9 @@ A real-time rock-paper-scissors game using **MediaPipe** for hand detection and 
 
 ## ✨ Features
 
-- **2-Player Split Screen** with real-time hand gesture recognition
-- **Hand Orientation Normalization** - works at any angle
-- **Visual Feedback** - shows normalized hand and skeleton
+- **2-Player Split Screen** with real-time hand gesture recognition  
+- **Hand Orientation Normalization** – works at any angle  
+- **Visual Feedback** – shows normalized hand and skeleton  
 
 ## 🎯 Demo
 
@@ -43,15 +43,15 @@ python main.py
 - **Classification**: SVM (RBF kernel)
 - **Features**: 83 features (landmarks, distances, angles, palm spread)
 - **Data Augmentation**: 3x training samples
-- **Test Accuracy**: ~85.8%
+- **Test Accuracy**: ~91.67%
 
 ## 📊 Model Performance
 
 | Class    | Precision | Recall | F1-Score |
 |----------|-----------|--------|----------|
-| Rock     | 0.70      | 1.00   | 0.82     |
-| Paper    | 1.00      | 0.60   | 0.75     |
-| Scissors | 1.00      | 0.98   | 0.99     |
+| Rock     | 0.80      | 1.00   | 0.89     |
+| Paper    | 1.00      | 0.75   | 0.86     |
+| Scissors | 1.00      | 1.00   | 1.00     |
 
 ---
 
