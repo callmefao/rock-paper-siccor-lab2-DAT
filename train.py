@@ -40,11 +40,49 @@ def calculate_angle(p1, p2, p3):
     cos_angle = np.clip(cos_angle, -1.0, 1.0)
     return np.arccos(cos_angle)
 
-def extract_hand_landmarks(image_path):
+def augment_image(image):
+    """
+    Augment image with rotation and flipping
+    Returns list of augmented images
+    """
+    augmented_images = [image]
+
+    # Horizontal flip (mirror)
+    flipped_h = cv2.flip(image, 1)
+    augmented_images.append(flipped_h)
+
+    # Rotate -15 degrees
+    h, w = image.shape[:2]
+    center = (w // 2, h // 2)
+
+    for angle in [-15, 15]:
+        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+        rotated = cv2.warpAffine(image, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+        augmented_images.append(rotated)
+
+    # Flip + rotate combinations
+    M_rot = cv2.getRotationMatrix2D(center, 10, 1.0)
+    flipped_rotated = cv2.warpAffine(flipped_h, M_rot, (w, h), borderMode=cv2.BORDER_REPLICATE)
+    augmented_images.append(flipped_rotated)
+
+    return augmented_images
+
+def extract_hand_landmarks(image_path, return_image=False):
     """Extract enhanced hand features including distances and angles"""
     image = cv2.imread(image_path)
     if image is None:
+        return None if not return_image else (None, None)
+
+    if return_image:
+        return extract_features_from_image(image), image
+    else:
+        return extract_features_from_image(image)
+
+def extract_features_from_image(image):
+    """Extract features from an image array (used for both original and augmented images)"""
+    if image is None:
         return None
+
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     results = hands.process(image_rgb)
 
@@ -109,11 +147,11 @@ def extract_hand_landmarks(image_path):
 # =====================================
 # 5️⃣ Data Augmentation
 # =====================================
-def augment_features(features, num_augmentations=3):
+def augment_features(features, num_augmentations=2):
     """Augment features by adding small random noise"""
     augmented = [features]
     for _ in range(num_augmentations):
-        noise = np.random.normal(0, 0.02, features.shape)  # Small Gaussian noise
+        noise = np.random.normal(0, 0.015, features.shape)  # Small Gaussian noise
         augmented.append(features + noise)
     return augmented
 
@@ -128,21 +166,37 @@ def load_dataset(folder_path, label, augment=False):
     for filename in os.listdir(folder_path):
         if filename.endswith(('.jpg', '.png', '.jpeg')):
             path = os.path.join(folder_path, filename)
-            features = extract_hand_landmarks(path)
-            if features is not None:
-                if augment:
-                    # Apply data augmentation to training set
-                    augmented_features = augment_features(features, num_augmentations=2)
-                    for aug_feat in augmented_features:
-                        X.append(aug_feat)
-                        y.append(label)
-                    count += len(augmented_features)
-                else:
+
+            if augment:
+                # Load image for augmentation
+                image = cv2.imread(path)
+                if image is None:
+                    failed += 1
+                    continue
+
+                # Apply image augmentation (rotate, flip)
+                augmented_images = augment_image(image)
+
+                for aug_img in augmented_images:
+                    features = extract_features_from_image(aug_img)
+                    if features is not None:
+                        # Apply feature-level noise augmentation
+                        feature_augmented = augment_features(features, num_augmentations=1)
+                        for aug_feat in feature_augmented:
+                            X.append(aug_feat)
+                            y.append(label)
+                        count += len(feature_augmented)
+                    else:
+                        failed += 1
+            else:
+                # No augmentation for test set
+                features = extract_hand_landmarks(path)
+                if features is not None:
                     X.append(features)
                     y.append(label)
                     count += 1
-            else:
-                failed += 1
+                else:
+                    failed += 1
 
     print(f"   Loaded: {count} samples, Failed: {failed}")
     return X, y
