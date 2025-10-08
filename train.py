@@ -5,7 +5,8 @@ import os
 import cv2
 import numpy as np
 import mediapipe as mp
-from sklearn import svm
+from sklearn.svm import LinearSVC
+from sklearn.linear_model import RidgeClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GridSearchCV, cross_val_score
@@ -243,20 +244,25 @@ X_test_scaled = scaler.transform(X_test)
 # =====================================
 print("\n🔍 Performing hyperparameter tuning (this may take a while)...")
 
+# param_grid = {
+#     'C': [0.1, 1, 10, 100, 500],
+#     'loss': ['hinge', 'squared_hinge'],
+#     'max_iter': [1000, 2000, 3000]
+# }
 param_grid = {
-    'C': [1, 10, 100, 500],
-    'gamma': ['scale', 'auto', 0.001, 0.01, 0.1],
-    'kernel': ['rbf', 'poly']
+    'alpha': [0.1, 1.0, 10.0, 100.0],
+    'solver': ['auto', 'svd', 'cholesky', 'lsqr', 'sparse_cg', 'sag', 'saga']
 }
-
 grid_search = GridSearchCV(
-    svm.SVC(),
+    # LinearSVC(dual='auto', random_state=42),
+    RidgeClassifier(random_state=42),
     param_grid,
     cv=5,
     scoring='accuracy',
     n_jobs=-1,
     verbose=1
 )
+
 
 grid_search.fit(X_train_scaled, y_train)
 
@@ -301,7 +307,15 @@ print("📊 Confusion matrix saved to model/confusion_matrix.png")
 # =====================================
 # 1️⃣2️⃣ Lưu mô hình và scaler
 # =====================================
-dump(clf, "model/rps_svm_model.joblib")
+dump(clf, "model/rps_ridge_model.joblib")
 dump(scaler, "model/rps_scaler.joblib")
 print("\n💾 Saved SVM model and scaler to model/")
 print("🎉 Training complete!")
+
+#                                Accuracy  Balanced Accuracy ROC AUC  F1 Score  Time Taken
+# Model
+# LinearSVC                          1.00               1.00    None      1.00        0.48
+# LinearDiscriminantAnalysis         1.00               1.00    None      1.00        0.27
+# CalibratedClassifierCV             1.00               1.00    None      1.00        1.45
+# RidgeClassifierCV                  1.00               1.00    None      1.00        0.22
+# RidgeClassifier                    1.00               1.00    None      1.00        0.11

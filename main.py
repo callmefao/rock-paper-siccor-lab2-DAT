@@ -12,7 +12,7 @@ from collections import deque
 # =====================================
 # 1️⃣ Load trained model and scaler
 # =====================================
-clf = load("model/rps_svm_model.joblib")
+clf = load("model/rps_ridge_model.joblib")
 scaler = load("model/rps_scaler.joblib")
 
 # =====================================

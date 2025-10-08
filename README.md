@@ -40,17 +40,17 @@ python main.py
 ## 🔧 Tech Stack
 
 - **Hand Detection**: MediaPipe
-- **Classification**: SVM (RBF kernel)
+- **Classification**: RidgeClassifier 
 - **Features**: 83 features (landmarks, distances, angles, palm spread)
 - **Data Augmentation**: 3x training samples
-- **Test Accuracy**: ~91.67%
+- **Test Accuracy**: ~1.00%
 
 ## 📊 Model Performance
 
 | Class    | Precision | Recall | F1-Score |
 |----------|-----------|--------|----------|
-| Rock     | 0.80      | 1.00   | 0.89     |
-| Paper    | 1.00      | 0.75   | 0.86     |
+| Rock     | 1.00      | 1.00   | 1.00     |
+| Paper    | 1.00      | 1.00   | 1.00     |
 | Scissors | 1.00      | 1.00   | 1.00     |
 
 ---
