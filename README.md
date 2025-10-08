@@ -43,7 +43,7 @@ python main.py
 - **Classification**: RidgeClassifier 
 - **Features**: 83 features (landmarks, distances, angles, palm spread)
 - **Data Augmentation**: 3x training samples
-- **Test Accuracy**: ~1.00%
+- **Test Accuracy**: ~100%
 
 ## 📊 Model Performance
 
