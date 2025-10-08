@@ -56,9 +56,8 @@ python main.py
 ---
 
 
-**Overall Accuracy:** **91.67%**  
-**Best Params:** `C=1`, `gamma='scale'`, `kernel='rbf'`  
-**Cross-validation Mean Score:** **0.9998 ± 0.0004**
+**Overall Accuracy:** **100%**  
+**Best Params:** `alpha=100`, `solver='auto'`  
 
 Confusion matrix:  
 ![](./model/confusion_matrix.png)
