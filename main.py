@@ -9,31 +9,33 @@ import time
 import threading
 from collections import deque
 
-# =====================================
-# 1️⃣ Load trained model and scaler
-# =====================================
-clf = load("model/rps_ridge_model.joblib")
-scaler = load("model/rps_scaler.joblib")
+# Import module chung
+from hand_feature_extractor import HandFeatureExtractor
+
 
 # =====================================
-# 2️⃣ Player class with separate Mediapipe instance
+# Player class with separate Mediapipe instance
 # =====================================
 class Player:
     """Each player has their own Mediapipe hands instance and processing thread"""
 
-    def __init__(self, player_id, name):
+    def __init__(self, player_id, name, model, scaler):
         self.player_id = player_id
         self.name = name
+        self.model = model
+        self.scaler = scaler
 
-        # Separate Mediapipe instance for this player
-        self.mp_hands = mp.solutions.hands
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.hands = self.mp_hands.Hands(
+        # Separate HandFeatureExtractor instance for this player
+        self.feature_extractor = HandFeatureExtractor(
             static_image_mode=False,
             max_num_hands=1,
             min_detection_confidence=0.7,
             min_tracking_confidence=0.7
         )
+
+        # For drawing landmarks
+        self.mp_hands = self.feature_extractor.mp_hands
+        self.mp_drawing = self.feature_extractor.mp_drawing
 
         # Thread-safe data storage
         self.lock = threading.Lock()
@@ -59,7 +61,7 @@ class Player:
         self.running = False
         if self.thread:
             self.thread.join(timeout=1.0)
-        self.hands.close()
+        self.feature_extractor.close()
 
     def update_frame(self, frame):
         """Update the frame to be processed (thread-safe)"""
@@ -108,29 +110,23 @@ class Player:
             time.sleep(0.01)  # Small delay to avoid CPU overload
 
     def _extract_landmarks(self, frame):
-        """Extract landmarks from frame"""
-        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.hands.process(image_rgb)
+        """Extract landmarks from frame using HandFeatureExtractor"""
+        # Extract landmarks array
+        landmarks_array = self.feature_extractor.extract_landmarks_from_image(frame)
 
-        if not results.multi_hand_landmarks:
+        if landmarks_array is None:
             return None, None, None
 
-        hand_landmarks = results.multi_hand_landmarks[0]
-
-        # Extract all landmarks
-        landmarks = []
-        for lm in hand_landmarks.landmark:
-            landmarks.append([lm.x, lm.y, lm.z])
-        landmarks = np.array(landmarks)
-
-        # Store original
-        original_landmarks = hand_landmarks
+        # Store original for drawing (convert back to mediapipe format)
+        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.feature_extractor.hands.process(image_rgb)
+        original_landmarks = results.multi_hand_landmarks[0] if results.multi_hand_landmarks else None
 
         # Normalize orientation
-        normalized = normalize_hand_orientation(landmarks)
+        normalized = normalize_hand_orientation(landmarks_array)
 
         # Extract features
-        features = extract_features_from_landmarks(normalized)
+        features = self.feature_extractor.extract_features_from_landmarks(normalized)
 
         return features, original_landmarks, normalized
 
@@ -139,8 +135,8 @@ class Player:
         if features is None:
             return None
 
-        features_scaled = scaler.transform([features])
-        prediction = clf.predict(features_scaled)[0]
+        features_scaled = self.scaler.transform([features])
+        prediction = self.model.predict(features_scaled)[0]
 
         labels = {0: "Rock", 1: "Paper", 2: "Scissors"}
         return labels[prediction]
@@ -162,22 +158,10 @@ class Player:
         # Return most common
         return max(counts, key=counts.get)
 
+
 # =====================================
-# 3️⃣ Feature extraction functions (refactored)
+# Helper functions
 # =====================================
-def calculate_distance(p1, p2):
-    """Calculate Euclidean distance between two points"""
-    return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2 + (p1[2] - p2[2])**2)
-
-def calculate_angle(p1, p2, p3):
-    """Calculate angle at p2 formed by p1-p2-p3"""
-    v1 = np.array([p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]])
-    v2 = np.array([p3[0] - p2[0], p3[1] - p2[1], p3[2] - p2[2]])
-
-    cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6)
-    cos_angle = np.clip(cos_angle, -1.0, 1.0)
-    return np.arccos(cos_angle)
-
 def normalize_hand_orientation(landmarks):
     """
     Normalize hand orientation to match training data (hand pointing up)
@@ -206,46 +190,6 @@ def normalize_hand_orientation(landmarks):
 
     return rotated_landmarks
 
-def extract_features_from_landmarks(landmarks):
-    """Extract enhanced features from landmarks"""
-    # Basic features: normalized coordinates relative to wrist
-    wrist = landmarks[0]
-    normalized_landmarks = landmarks - wrist
-    basic_features = normalized_landmarks.flatten()
-
-    # Enhanced features: distances between key points
-    distances = []
-    fingertips = [4, 8, 12, 16, 20]
-
-    for tip in fingertips:
-        distances.append(calculate_distance(landmarks[tip], landmarks[0]))
-
-    palm_center = np.mean(landmarks[[0, 5, 9, 13, 17]], axis=0)
-    for tip in fingertips:
-        distances.append(calculate_distance(landmarks[tip], palm_center))
-
-    for i in range(len(fingertips) - 1):
-        distances.append(calculate_distance(landmarks[fingertips[i]], landmarks[fingertips[i+1]]))
-
-    # Finger angles
-    angles = []
-    finger_connections = [
-        [2, 3, 4], [5, 6, 7], [9, 10, 11], [13, 14, 15], [17, 18, 19]
-    ]
-
-    for conn in finger_connections:
-        angles.append(calculate_angle(landmarks[conn[0]], landmarks[conn[1]], landmarks[conn[2]]))
-
-    palm_spread = calculate_distance(landmarks[2], landmarks[17])
-
-    enhanced_features = np.concatenate([
-        basic_features,
-        np.array(distances),
-        np.array(angles),
-        [palm_spread]
-    ])
-
-    return enhanced_features
 
 def draw_normalized_hand(frame, landmarks, position="top-left"):
     """Draw normalized hand visualization"""
@@ -299,9 +243,7 @@ def draw_normalized_hand(frame, landmarks, position="top-left"):
 
     return frame
 
-# =====================================
-# 4️⃣ Game logic functions
-# =====================================
+
 def determine_winner(player1_gesture, player2_gesture):
     """Determine the winner of the game"""
     if player1_gesture is None or player2_gesture is None:
@@ -321,247 +263,286 @@ def determine_winner(player1_gesture, player2_gesture):
 
     return win_conditions.get((player1_gesture, player2_gesture), None)
 
+
 # =====================================
-# 5️⃣ Main game loop
+# RPS Game Class
 # =====================================
-def main():
-    # Initialize camera
-    cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+class RPSGame:
+    """Main game class for Rock Paper Scissors"""
 
-    # Create two players with separate threads
-    player1 = Player(1, "Player 1")
-    player2 = Player(2, "Player 2")
+    def __init__(self, model_path, scaler_path, camera_width=1280, camera_height=720, countdown_duration=3):
+        """
+        Initialize game with model and scaler
 
-    # Start processing threads
-    player1.start()
-    player2.start()
+        Args:
+            model_path: Path to trained model
+            scaler_path: Path to feature scaler
+            camera_width: Width of camera capture
+            camera_height: Height of camera capture
+            countdown_duration: Duration of countdown in seconds
+        """
+        # Load trained model and scaler
+        self.model = load(model_path)
+        self.scaler = load(scaler_path)
 
-    # Game state
-    game_mode = "play"
-    countdown_start = None
-    countdown_duration = 3
-    player1_final = None
-    player2_final = None
-    result = ""
-    result_time = None
+        # Game configuration
+        self.camera_width = camera_width
+        self.camera_height = camera_height
+        self.countdown_duration = countdown_duration
 
-    # Score tracking
-    player1_score = 0
-    player2_score = 0
-    draws = 0
+    def run(self):
+        """Run the main game loop"""
+        # Initialize camera
+        cap = cv2.VideoCapture(0)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
 
-    print("🎮 Rock Paper Scissors Game Started! (Multi-threaded)")
-    print("📹 Controls:")
-    print("   SPACE - Start countdown and capture gestures")
-    print("   R - Reset game and scores")
-    print("   Q - Quit")
-    print("\n🎯 Position your hands:")
-    print("   Player 1: Left side of screen")
-    print("   Player 2: Right side of screen")
-    print("\n⚡ Using separate threads for each player - reduced interference!")
+        # Create two players with separate threads
+        player1 = Player(1, "Player 1", self.model, self.scaler)
+        player2 = Player(2, "Player 2", self.model, self.scaler)
 
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+        # Start processing threads
+        player1.start()
+        player2.start()
 
-            frame = cv2.flip(frame, 1)
-            height, width = frame.shape[:2]
-            mid_width = width // 2
+        # Game state
+        game_mode = "play"
+        countdown_start = None
+        player1_final = None
+        player2_final = None
+        result = ""
+        result_time = None
 
-            # Split frame into two halves
-            frame_left = frame[:, :mid_width].copy()
-            frame_right = frame[:, mid_width:].copy()
+        # Score tracking
+        player1_score = 0
+        player2_score = 0
+        draws = 0
 
-            # Update frames for each player (threads will process them)
-            player1.update_frame(frame_left)
-            player2.update_frame(frame_right)
+        print("🎮 Rock Paper Scissors Game")
+        print("Controls: SPACE=Start | R=Reset | Q=Quit")
 
-            # Get results from both players
-            results_p1 = player1.get_results()
-            results_p2 = player2.get_results()
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-            # Draw hand landmarks
-            if results_p1['landmarks']:
-                player1.mp_drawing.draw_landmarks(
-                    frame_left, results_p1['landmarks'], player1.mp_hands.HAND_CONNECTIONS,
-                    player1.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-                    player1.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
-                )
-                if results_p1['normalized'] is not None:
-                    frame_left = draw_normalized_hand(frame_left, results_p1['normalized'], "top-left")
+                frame = cv2.flip(frame, 1)
+                height, width = frame.shape[:2]
+                mid_width = width // 2
 
-            if results_p2['landmarks']:
-                player2.mp_drawing.draw_landmarks(
-                    frame_right, results_p2['landmarks'], player2.mp_hands.HAND_CONNECTIONS,
-                    player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-                    player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
-                )
-                if results_p2['normalized'] is not None:
-                    frame_right = draw_normalized_hand(frame_right, results_p2['normalized'], "top-right")
+                # Split frame into two halves
+                frame_left = frame[:, :mid_width].copy()
+                frame_right = frame[:, mid_width:].copy()
 
-            # Game logic
-            if game_mode == "play":
-                gesture_p1 = results_p1['prediction'] if results_p1['prediction'] else "No hand"
-                gesture_p2 = results_p2['prediction'] if results_p2['prediction'] else "No hand"
+                # Update frames for each player (threads will process them)
+                player1.update_frame(frame_left)
+                player2.update_frame(frame_right)
 
-                cv2.putText(frame_left, f"Player 1", (10, 250),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                cv2.putText(frame_left, f"{gesture_p1}", (10, 290),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                # Get results from both players
+                results_p1 = player1.get_results()
+                results_p2 = player2.get_results()
 
-                cv2.putText(frame_right, f"Player 2", (10, 250),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                cv2.putText(frame_right, f"{gesture_p2}", (10, 290),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                # Draw hand landmarks
+                if results_p1['landmarks']:
+                    player1.mp_drawing.draw_landmarks(
+                        frame_left, results_p1['landmarks'], player1.mp_hands.HAND_CONNECTIONS,
+                        player1.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                        player1.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
+                    )
+                    if results_p1['normalized'] is not None:
+                        frame_left = draw_normalized_hand(frame_left, results_p1['normalized'], "top-left")
 
-            elif game_mode == "countdown":
-                elapsed = time.time() - countdown_start
-                remaining = countdown_duration - elapsed
+                if results_p2['landmarks']:
+                    player2.mp_drawing.draw_landmarks(
+                        frame_right, results_p2['landmarks'], player2.mp_hands.HAND_CONNECTIONS,
+                        player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                        player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
+                    )
+                    if results_p2['normalized'] is not None:
+                        frame_right = draw_normalized_hand(frame_right, results_p2['normalized'], "top-right")
 
-                if remaining > 0:
-                    countdown_text = str(int(remaining) + 1)
+                # Game logic
+                if game_mode == "play":
+                    gesture_p1 = results_p1['prediction'] if results_p1['prediction'] else "No hand"
+                    gesture_p2 = results_p2['prediction'] if results_p2['prediction'] else "No hand"
 
-                    cv2.putText(frame_left, countdown_text, (mid_width//2 - 50, height//2),
-                               cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
-                    cv2.putText(frame_right, countdown_text, (mid_width//2 - 50, height//2),
-                               cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
-                else:
-                    player1_final = results_p1['prediction']
-                    player2_final = results_p2['prediction']
-                    winner = determine_winner(player1_final, player2_final)
+                    cv2.putText(frame_left, f"Player 1", (10, 250),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    cv2.putText(frame_left, f"{gesture_p1}", (10, 290),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-                    if winner == "p1":
-                        player1_score += 1
-                        result = "Player 1 Wins!"
-                    elif winner == "p2":
-                        player2_score += 1
-                        result = "Player 2 Wins!"
-                    elif winner == "draw":
-                        draws += 1
-                        result = "Draw!"
+                    cv2.putText(frame_right, f"Player 2", (10, 250),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    cv2.putText(frame_right, f"{gesture_p2}", (10, 290),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+                elif game_mode == "countdown":
+                    elapsed = time.time() - countdown_start
+                    remaining = self.countdown_duration - elapsed
+
+                    if remaining > 0:
+                        countdown_text = str(int(remaining) + 1)
+
+                        cv2.putText(frame_left, countdown_text, (mid_width//2 - 50, height//2),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
+                        cv2.putText(frame_right, countdown_text, (mid_width//2 - 50, height//2),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
                     else:
-                        result = "No hands detected!"
+                        player1_final = results_p1['prediction']
+                        player2_final = results_p2['prediction']
+                        winner = determine_winner(player1_final, player2_final)
 
-                    result_time = time.time()
-                    game_mode = "result"
+                        if winner == "p1":
+                            player1_score += 1
+                            result = "Player 1 Wins!"
+                        elif winner == "p2":
+                            player2_score += 1
+                            result = "Player 2 Wins!"
+                        elif winner == "draw":
+                            draws += 1
+                            result = "Draw!"
+                        else:
+                            result = "No hands detected!"
 
-            elif game_mode == "result":
-                cv2.putText(frame_left, f"Player 1", (10, 250),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                cv2.putText(frame_left, f"{player1_final if player1_final else 'No hand'}",
-                           (10, 290), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                        result_time = time.time()
+                        game_mode = "result"
 
-                cv2.putText(frame_right, f"Player 2", (10, 250),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                cv2.putText(frame_right, f"{player2_final if player2_final else 'No hand'}",
-                           (10, 290), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                elif game_mode == "result":
+                    cv2.putText(frame_left, f"Player 1", (10, 250),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    cv2.putText(frame_left, f"{player1_final if player1_final else 'No hand'}",
+                               (10, 290), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-                if time.time() - result_time > 3:
+                    cv2.putText(frame_right, f"Player 2", (10, 250),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    cv2.putText(frame_right, f"{player2_final if player2_final else 'No hand'}",
+                               (10, 290), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+                    if time.time() - result_time > 3:
+                        game_mode = "play"
+                        player1_final = None
+                        player2_final = None
+                        result = ""
+
+                # Combine frames
+                combined_frame = np.hstack([frame_left, frame_right])
+
+                # Draw center line
+                cv2.line(combined_frame, (mid_width, 0), (mid_width, height), (255, 255, 255), 2)
+
+                # Display scores
+                score_text = f"P1: {player1_score}  |  Draws: {draws}  |  P2: {player2_score}"
+                text_size = cv2.getTextSize(score_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
+                score_x = (width - text_size[0]) // 2
+                score_y = 50
+
+                cv2.rectangle(combined_frame,
+                             (score_x - 10, score_y - text_size[1] - 10),
+                             (score_x + text_size[0] + 10, score_y + 10),
+                             (0, 0, 0), -1)
+
+                cv2.putText(combined_frame, score_text, (score_x, score_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+
+                # Highlight winner
+                if player1_score > player2_score:
+                    cv2.putText(combined_frame, "WINNING!", (50, 100),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                elif player2_score > player1_score:
+                    cv2.putText(combined_frame, "WINNING!", (width - 250, 100),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+
+                # Display result
+                if result:
+                    text_size = cv2.getTextSize(result, cv2.FONT_HERSHEY_SIMPLEX, 2, 3)[0]
+                    text_x = (width - text_size[0]) // 2
+                    text_y = height - 50
+
+                    cv2.rectangle(combined_frame,
+                                 (text_x - 10, text_y - text_size[1] - 10),
+                                 (text_x + text_size[0] + 10, text_y + 10),
+                                 (0, 0, 0), -1)
+
+                    if "Player 1" in result:
+                        color = (0, 255, 255)
+                    elif "Player 2" in result:
+                        color = (0, 165, 255)
+                    else:
+                        color = (0, 255, 0)
+
+                    cv2.putText(combined_frame, result, (text_x, text_y),
+                               cv2.FONT_HERSHEY_SIMPLEX, 2, color, 3)
+
+                # Display instructions
+                cv2.putText(combined_frame, "SPACE: Start | R: Reset | Q: Quit | Multi-threaded Mode",
+                           (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+                cv2.imshow("Rock Paper Scissors - 2 Players (Multi-threaded)", combined_frame)
+
+                # Handle keyboard input
+                key = cv2.waitKey(1) & 0xFF
+
+                if key == ord('q'):
+                    break
+                elif key == ord(' ') and game_mode == "play":
+                    game_mode = "countdown"
+                    countdown_start = time.time()
+                    result = ""
+                elif key == ord('r'):
                     game_mode = "play"
                     player1_final = None
                     player2_final = None
                     result = ""
+                    player1_score = 0
+                    player2_score = 0
+                    draws = 0
 
-            # Combine frames
-            combined_frame = np.hstack([frame_left, frame_right])
+        finally:
+            # Cleanup
+            player1.stop()
+            player2.stop()
+            cap.release()
+            cv2.destroyAllWindows()
 
-            # Draw center line
-            cv2.line(combined_frame, (mid_width, 0), (mid_width, height), (255, 255, 255), 2)
-
-            # Display scores
-            score_text = f"P1: {player1_score}  |  Draws: {draws}  |  P2: {player2_score}"
-            text_size = cv2.getTextSize(score_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
-            score_x = (width - text_size[0]) // 2
-            score_y = 50
-
-            cv2.rectangle(combined_frame,
-                         (score_x - 10, score_y - text_size[1] - 10),
-                         (score_x + text_size[0] + 10, score_y + 10),
-                         (0, 0, 0), -1)
-
-            cv2.putText(combined_frame, score_text, (score_x, score_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
-
-            # Highlight winner
+            # Print final scores
+            print("\n🏆 FINAL SCORES")
+            print(f"Player 1: {player1_score} | Player 2: {player2_score} | Draws: {draws}")
             if player1_score > player2_score:
-                cv2.putText(combined_frame, "WINNING!", (50, 100),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                print("Player 1 WINS! 🎉")
             elif player2_score > player1_score:
-                cv2.putText(combined_frame, "WINNING!", (width - 250, 100),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                print("Player 2 WINS! 🎉")
+            else:
+                print("It's a TIE! 🤝")
 
-            # Display result
-            if result:
-                text_size = cv2.getTextSize(result, cv2.FONT_HERSHEY_SIMPLEX, 2, 3)[0]
-                text_x = (width - text_size[0]) // 2
-                text_y = height - 50
 
-                cv2.rectangle(combined_frame,
-                             (text_x - 10, text_y - text_size[1] - 10),
-                             (text_x + text_size[0] + 10, text_y + 10),
-                             (0, 0, 0), -1)
+# =====================================
+# Main entry point
+# =====================================
+def main(model_path, scaler_path, camera_width=1280, camera_height=720, countdown_duration=3):
+    """
+    Main function to run the game
 
-                if "Player 1" in result:
-                    color = (0, 255, 255)
-                elif "Player 2" in result:
-                    color = (0, 165, 255)
-                else:
-                    color = (0, 255, 0)
+    Args:
+        model_path: Path to trained model
+        scaler_path: Path to feature scaler
+        camera_width: Width of camera capture
+        camera_height: Height of camera capture
+        countdown_duration: Duration of countdown in seconds
+    """
+    game = RPSGame(model_path, scaler_path, camera_width, camera_height, countdown_duration)
+    game.run()
 
-                cv2.putText(combined_frame, result, (text_x, text_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, 2, color, 3)
-
-            # Display instructions
-            cv2.putText(combined_frame, "SPACE: Start | R: Reset | Q: Quit | Multi-threaded Mode",
-                       (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-            cv2.imshow("Rock Paper Scissors - 2 Players (Multi-threaded)", combined_frame)
-
-            # Handle keyboard input
-            key = cv2.waitKey(1) & 0xFF
-
-            if key == ord('q'):
-                break
-            elif key == ord(' ') and game_mode == "play":
-                game_mode = "countdown"
-                countdown_start = time.time()
-                result = ""
-            elif key == ord('r'):
-                game_mode = "play"
-                player1_final = None
-                player2_final = None
-                result = ""
-                player1_score = 0
-                player2_score = 0
-                draws = 0
-                print("\n🔄 Scores reset!")
-
-    finally:
-        # Cleanup
-        print("\n🛑 Stopping players...")
-        player1.stop()
-        player2.stop()
-        cap.release()
-        cv2.destroyAllWindows()
-
-        # Print final scores
-        print("\n" + "="*50)
-        print("🏆 FINAL SCORES 🏆")
-        print("="*50)
-        print(f"Player 1: {player1_score}")
-        print(f"Player 2: {player2_score}")
-        print(f"Draws: {draws}")
-        if player1_score > player2_score:
-            print("\n🎉 Player 1 is the WINNER! 🎉")
-        elif player2_score > player1_score:
-            print("\n🎉 Player 2 is the WINNER! 🎉")
-        else:
-            print("\n🤝 It's a TIE! 🤝")
-        print("="*50)
 
 if __name__ == "__main__":
-    main()
+    # =====================================
+    # Configuration parameters
+    # =====================================
+    MODEL_PATH = "model/rps_ridge_model.joblib"
+    SCALER_PATH = "model/rps_scaler.joblib"
+    CAMERA_WIDTH = 1280
+    CAMERA_HEIGHT = 720
+    COUNTDOWN_DURATION = 3
+
+    # Run the game
+    main(MODEL_PATH, SCALER_PATH, CAMERA_WIDTH, CAMERA_HEIGHT, COUNTDOWN_DURATION)
