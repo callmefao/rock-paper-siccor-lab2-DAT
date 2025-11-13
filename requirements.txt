@@ -1,0 +1,14 @@
+# Project requirements for Rock-Paper-Scissors
+# Tested with Python 3.8+ (this repo shows Python 3.11 bytecode)
+
+numpy>=1.24.0
+opencv-python>=4.7.0
+mediapipe>=0.10.0
+scikit-learn>=1.2.2
+joblib>=1.2.0
+matplotlib>=3.7.0
+seaborn>=0.12.2
+
+# Optional / dev (uncomment if you want plotting in non-GUI environments)
+# matplotlib-inline
+
