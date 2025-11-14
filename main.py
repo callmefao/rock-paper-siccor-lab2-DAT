@@ -8,9 +8,28 @@ from joblib import load
 import time
 import threading
 from collections import deque
+import winsound  # Windows native audio - ultra fast!
 
 # Import module chung
 from hand_feature_extractor import HandFeatureExtractor
+
+
+# =====================================
+# Audio Helper
+# =====================================
+def play_sound(wav_file):
+    """Play WAV file using Windows native API - ultra fast and non-blocking"""
+    def _play():
+        try:
+            # SND_ASYNC = play and return immediately (fire-and-forget)
+            # SND_FILENAME = interpret wav_file as a filename
+            winsound.PlaySound(wav_file, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        except Exception as e:
+            print(f"⚠ Warning: Could not play audio {wav_file}: {e}")
+
+    # Still use thread to be extra safe, but winsound is already non-blocking
+    thread = threading.Thread(target=_play, daemon=True)
+    thread.start()
 
 
 # =====================================
@@ -45,6 +64,8 @@ class Player:
         self.normalized_landmarks = None
         self.prediction = None
         self.prediction_buffer = deque(maxlen=7)  # Smoothing buffer
+        self.captured_frame = None  # Store captured frame from previous round
+        self.captured_gesture = None  # Store captured gesture from previous round
 
         # Thread control
         self.running = False
@@ -191,42 +212,13 @@ def normalize_hand_orientation(landmarks):
     return rotated_landmarks
 
 
-def draw_normalized_hand(frame, landmarks, position="top-left"):
-    """Draw normalized hand visualization"""
-    viz_size = 200
-    viz_img = np.zeros((viz_size, viz_size, 3), dtype=np.uint8)
+def draw_captured_frame(frame, captured_frame, position="top-left", gesture_text=""):
+    """Draw captured frame from previous round with gesture label"""
+    # Only draw if there is a captured frame
+    if captured_frame is None:
+        return frame
 
-    landmarks_2d = landmarks[:, :2].copy()
-    min_x, min_y = landmarks_2d.min(axis=0)
-    max_x, max_y = landmarks_2d.max(axis=0)
-
-    scale = 0.8 * viz_size / max(max_x - min_x, max_y - min_y)
-    landmarks_2d = (landmarks_2d - [min_x, min_y]) * scale
-
-    offset = [(viz_size - (max_x - min_x) * scale) / 2,
-              (viz_size - (max_y - min_y) * scale) / 2]
-    landmarks_2d = landmarks_2d + offset
-
-    connections = [
-        (0, 1), (1, 2), (2, 3), (3, 4),
-        (0, 5), (5, 6), (6, 7), (7, 8),
-        (0, 9), (9, 10), (10, 11), (11, 12),
-        (0, 13), (13, 14), (14, 15), (15, 16),
-        (0, 17), (17, 18), (18, 19), (19, 20),
-        (5, 9), (9, 13), (13, 17)
-    ]
-
-    for connection in connections:
-        pt1 = tuple(landmarks_2d[connection[0]].astype(int))
-        pt2 = tuple(landmarks_2d[connection[1]].astype(int))
-        cv2.line(viz_img, pt1, pt2, (0, 255, 255), 2)
-
-    for point in landmarks_2d:
-        cv2.circle(viz_img, tuple(point.astype(int)), 3, (0, 255, 0), -1)
-
-    cv2.putText(viz_img, "Normalized", (5, 20),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
+    viz_size = 150  # Reduced from 200 to 150
     h, w = frame.shape[:2]
     margin = 10
 
@@ -235,11 +227,75 @@ def draw_normalized_hand(frame, landmarks, position="top-left"):
     else:
         x_offset, y_offset = w - viz_size - margin, margin
 
+    # Resize captured frame to fit
+    viz_img = cv2.resize(captured_frame, (viz_size, viz_size))
+
+    # Add semi-transparent background for text
+    overlay = viz_img.copy()
+    cv2.rectangle(overlay, (0, viz_size - 35), (viz_size, viz_size), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.7, viz_img, 0.3, 0, viz_img)
+
+    # Add gesture text
+    if gesture_text:
+        cv2.putText(viz_img, "Last Round:", (5, viz_size - 22),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+        cv2.putText(viz_img, gesture_text, (5, viz_size - 6),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+    # Draw border
     cv2.rectangle(frame, (x_offset-2, y_offset-2),
                   (x_offset+viz_size+2, y_offset+viz_size+2),
                   (255, 255, 255), 2)
 
+    # Place on frame
     frame[y_offset:y_offset+viz_size, x_offset:x_offset+viz_size] = viz_img
+
+    return frame
+
+
+def draw_logo(frame, logo_img, position="top-center", max_height=80):
+    """Draw FPT logo on frame"""
+    if logo_img is None:
+        return frame
+
+    h, w = frame.shape[:2]
+
+    # Resize logo maintaining aspect ratio
+    logo_h, logo_w = logo_img.shape[:2]
+    aspect_ratio = logo_w / logo_h
+    new_height = max_height
+    new_width = int(new_height * aspect_ratio)
+
+    logo_resized = cv2.resize(logo_img, (new_width, new_height))
+
+    # Position logo
+    if position == "top-center":
+        x_offset = (w - new_width) // 2
+        y_offset = 10
+    elif position == "top-right":
+        x_offset = w - new_width - 10
+        y_offset = 10
+    else:  # top-left
+        x_offset = 10
+        y_offset = 10
+
+    # Handle transparency if logo has alpha channel
+    if logo_resized.shape[2] == 4:
+        # Extract alpha channel
+        alpha = logo_resized[:, :, 3] / 255.0
+
+        # Get ROI from frame
+        roi = frame[y_offset:y_offset+new_height, x_offset:x_offset+new_width]
+
+        # Blend logo with frame
+        for c in range(3):
+            roi[:, :, c] = (alpha * logo_resized[:, :, c] +
+                           (1 - alpha) * roi[:, :, c])
+
+        frame[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = roi
+    else:
+        # No alpha channel, just overlay
+        frame[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = logo_resized
 
     return frame
 
@@ -289,6 +345,17 @@ class RPSGame:
         self.camera_width = camera_width
         self.camera_height = camera_height
         self.countdown_duration = countdown_duration
+
+        # Load FPT logo
+        self.logo = None
+        try:
+            self.logo = cv2.imread("asset/LogoFPT.png", cv2.IMREAD_UNCHANGED)
+            if self.logo is not None:
+                print("✓ FPT Logo loaded successfully")
+            else:
+                print("⚠ Warning: Could not load FPT logo from asset/LogoFPT.png")
+        except Exception as e:
+            print(f"⚠ Warning: Error loading logo: {e}")
 
     def run(self):
         """Run the main game loop"""
@@ -350,8 +417,10 @@ class RPSGame:
                         player1.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
                         player1.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
                     )
-                    if results_p1['normalized'] is not None:
-                        frame_left = draw_normalized_hand(frame_left, results_p1['normalized'], "top-left")
+
+                # Draw captured frame from previous round (only if exists)
+                if player1.captured_frame is not None:
+                    frame_left = draw_captured_frame(frame_left, player1.captured_frame, "top-left", player1.captured_gesture)
 
                 if results_p2['landmarks']:
                     player2.mp_drawing.draw_landmarks(
@@ -359,8 +428,10 @@ class RPSGame:
                         player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
                         player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
                     )
-                    if results_p2['normalized'] is not None:
-                        frame_right = draw_normalized_hand(frame_right, results_p2['normalized'], "top-right")
+
+                # Draw captured frame from previous round (only if exists)
+                if player2.captured_frame is not None:
+                    frame_right = draw_captured_frame(frame_right, player2.captured_frame, "top-right", player2.captured_gesture)
 
                 # Game logic
                 if game_mode == "play":
@@ -389,6 +460,12 @@ class RPSGame:
                         cv2.putText(frame_right, countdown_text, (mid_width//2 - 50, height//2),
                                    cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
                     else:
+                        # Capture the current frames and gestures before determining winner
+                        player1.captured_frame = frame_left.copy()
+                        player2.captured_frame = frame_right.copy()
+                        player1.captured_gesture = results_p1['prediction'] if results_p1['prediction'] else "No hand"
+                        player2.captured_gesture = results_p2['prediction'] if results_p2['prediction'] else "No hand"
+
                         player1_final = results_p1['prediction']
                         player2_final = results_p2['prediction']
                         winner = determine_winner(player1_final, player2_final)
@@ -396,12 +473,15 @@ class RPSGame:
                         if winner == "p1":
                             player1_score += 1
                             result = "Player 1 Wins!"
+                            play_sound("asset/result/player-1.wav")  # Play player 1 win sound
                         elif winner == "p2":
                             player2_score += 1
                             result = "Player 2 Wins!"
+                            play_sound("asset/result/player-2.wav")  # Play player 2 win sound
                         elif winner == "draw":
                             draws += 1
                             result = "Draw!"
+                            play_sound("asset/result/tie.wav")  # Play tie sound
                         else:
                             result = "No hands detected!"
 
@@ -431,11 +511,14 @@ class RPSGame:
                 # Draw center line
                 cv2.line(combined_frame, (mid_width, 0), (mid_width, height), (255, 255, 255), 2)
 
+                # Draw FPT logo at the top center
+                combined_frame = draw_logo(combined_frame, self.logo, position="top-center", max_height=60)
+
                 # Display scores
                 score_text = f"P1: {player1_score}  |  Draws: {draws}  |  P2: {player2_score}"
                 text_size = cv2.getTextSize(score_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
                 score_x = (width - text_size[0]) // 2
-                score_y = 50
+                score_y = 80  # Moved down to avoid logo
 
                 cv2.rectangle(combined_frame,
                              (score_x - 10, score_y - text_size[1] - 10),
