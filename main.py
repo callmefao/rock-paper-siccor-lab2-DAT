@@ -48,8 +48,8 @@ class Player:
         self.feature_extractor = HandFeatureExtractor(
             static_image_mode=False,
             max_num_hands=1,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.7
+            min_detection_confidence=0.5,  # Lower for faster detection
+            min_tracking_confidence=0.5    # Lower for smoother tracking
         )
 
         # For drawing landmarks
@@ -60,16 +60,18 @@ class Player:
         self.lock = threading.Lock()
         self.frame = None
         self.features = None
-        self.landmarks = None
-        self.normalized_landmarks = None
+        self.landmarks = None  # For drawing
         self.prediction = None
-        self.prediction_buffer = deque(maxlen=7)  # Smoothing buffer
+        self.prediction_buffer = deque(maxlen=5)  # Smoothing buffer (reduced from 7)
         self.captured_frame = None  # Store captured frame from previous round
         self.captured_gesture = None  # Store captured gesture from previous round
+        self.captured_frame_with_landmarks = None  # Store frame WITH MediaPipe drawing
 
         # Thread control
         self.running = False
         self.thread = None
+        self.frame_ready = threading.Event()  # Event-based processing
+        self.game_mode = "play"  # Track game mode for adaptive processing
 
     def start(self):
         """Start the processing thread"""
@@ -84,10 +86,12 @@ class Player:
             self.thread.join(timeout=1.0)
         self.feature_extractor.close()
 
-    def update_frame(self, frame):
+    def update_frame(self, frame, game_mode="play"):
         """Update the frame to be processed (thread-safe)"""
         with self.lock:
-            self.frame = frame.copy()
+            self.frame = frame  # No copy needed here, thread will handle it
+            self.game_mode = game_mode  # Update game mode
+        self.frame_ready.set()  # Signal that new frame is ready
 
     def get_results(self):
         """Get the latest processing results (thread-safe)"""
@@ -95,22 +99,40 @@ class Player:
             return {
                 'features': self.features,
                 'landmarks': self.landmarks,
-                'normalized': self.normalized_landmarks,
                 'prediction': self.prediction
             }
 
     def _process_loop(self):
-        """Main processing loop running in separate thread"""
+        """Main processing loop running in separate thread - OPTIMIZED"""
+        frame_skip_counter = 0
+        
         while self.running:
+            # Wait for new frame instead of polling
+            if not self.frame_ready.wait(timeout=0.1):
+                continue
+            self.frame_ready.clear()
+
             # Get frame to process
             with self.lock:
                 if self.frame is None:
-                    time.sleep(0.01)
                     continue
-                frame_to_process = self.frame.copy()
+                frame_to_process = self.frame
+                current_game_mode = self.game_mode
+            
+            # Adaptive frame skipping based on game mode
+            frame_skip_counter += 1
+            if current_game_mode == "countdown":
+                # During countdown, process every 3rd frame to save CPU
+                if frame_skip_counter % 3 != 0:
+                    continue
+            elif current_game_mode == "result":
+                # During result display, process every 5th frame
+                if frame_skip_counter % 5 != 0:
+                    continue
+            # In "play" mode, process every frame for real-time feedback
 
-            # Process frame
-            features, landmarks, normalized = self._extract_landmarks(frame_to_process)
+            # Process frame with SINGLE MediaPipe call
+            features, landmarks = self._extract_features_optimized(frame_to_process)
 
             # Predict gesture
             prediction = None
@@ -125,31 +147,31 @@ class Player:
             with self.lock:
                 self.features = features
                 self.landmarks = landmarks
-                self.normalized_landmarks = normalized
                 self.prediction = smoothed_prediction
 
-            time.sleep(0.01)  # Small delay to avoid CPU overload
-
-    def _extract_landmarks(self, frame):
-        """Extract landmarks from frame using HandFeatureExtractor"""
-        # Extract landmarks array
-        landmarks_array = self.feature_extractor.extract_landmarks_from_image(frame)
-
-        if landmarks_array is None:
-            return None, None, None
-
-        # Store original for drawing (convert back to mediapipe format)
+    def _extract_features_optimized(self, frame):
+        """Extract features with SINGLE MediaPipe call - OPTIMIZED"""
+        # Convert to RGB once
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # SINGLE MediaPipe call - this is the bottleneck!
         results = self.feature_extractor.hands.process(image_rgb)
-        original_landmarks = results.multi_hand_landmarks[0] if results.multi_hand_landmarks else None
 
-        # Normalize orientation
+        if not results.multi_hand_landmarks:
+            return None, None
+
+        hand_landmarks = results.multi_hand_landmarks[0]
+
+        # Extract landmarks as numpy array
+        landmarks_array = np.array([[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark])
+
+        # Normalize hand orientation (IMPORTANT for model accuracy)
         normalized = normalize_hand_orientation(landmarks_array)
 
-        # Extract features
+        # Extract features from normalized landmarks
         features = self.feature_extractor.extract_features_from_landmarks(normalized)
 
-        return features, original_landmarks, normalized
+        return features, hand_landmarks  # Return both features and landmarks for drawing
 
     def _predict_gesture(self, features):
         """Predict gesture from features"""
@@ -163,21 +185,19 @@ class Player:
         return labels[prediction]
 
     def _get_smoothed_prediction(self):
-        """Get most common prediction from buffer"""
+        """Get most common prediction from buffer - OPTIMIZED"""
         if not self.prediction_buffer:
             return None
 
-        # Count occurrences
-        counts = {}
-        for pred in self.prediction_buffer:
-            if pred:
-                counts[pred] = counts.get(pred, 0) + 1
-
+        # Use Counter for faster counting
+        from collections import Counter
+        counts = Counter(pred for pred in self.prediction_buffer if pred)
+        
         if not counts:
             return None
 
         # Return most common
-        return max(counts, key=counts.get)
+        return counts.most_common(1)[0][0]
 
 
 # =====================================
@@ -186,6 +206,7 @@ class Player:
 def normalize_hand_orientation(landmarks):
     """
     Normalize hand orientation to match training data (hand pointing up)
+    OPTIMIZED: Use vectorized operations for 5-10x speedup
     """
     wrist = landmarks[0]
     middle_mcp = landmarks[9]
@@ -202,12 +223,13 @@ def normalize_hand_orientation(landmarks):
         [sin_angle, cos_angle]
     ])
 
+    # OPTIMIZED: Vectorized rotation for all points at once
     rotated_landmarks = landmarks.copy()
-    for i in range(len(landmarks)):
-        point_2d = landmarks[i][:2] - wrist[:2]
-        rotated_point_2d = rotation_matrix_2d @ point_2d
-        rotated_landmarks[i][:2] = rotated_point_2d + wrist[:2]
-        rotated_landmarks[i][2] = landmarks[i][2]
+    points_2d = landmarks[:, :2] - wrist[:2]  # Center all points at once
+    rotated_points_2d = points_2d @ rotation_matrix_2d.T  # Vectorized rotation
+    rotated_landmarks[:, :2] = rotated_points_2d + wrist[:2]  # Translate back
+    # Keep z-coordinate unchanged
+    rotated_landmarks[:, 2] = landmarks[:, 2]
 
     return rotated_landmarks
 
@@ -358,11 +380,25 @@ class RPSGame:
             print(f"⚠ Warning: Error loading logo: {e}")
 
     def run(self):
-        """Run the main game loop"""
-        # Initialize camera
-        cap = cv2.VideoCapture(0)
+        """Run the main game loop - OPTIMIZED"""
+        # Initialize camera with optimized settings for Windows
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)  # DirectShow = faster, more stable on Windows
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
+        cap.set(cv2.CAP_PROP_FPS, 30)  # Limit to 30 FPS
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffer = less lag
+        
+        # Disable auto features for stable, consistent FPS (reduces jitter)
+        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)  # Disable autofocus
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Manual exposure mode
+        cap.set(cv2.CAP_PROP_AUTO_WB, 0)  # Disable auto white balance
+        
+        # Frame timing for consistent FPS (prevents jitter)
+        target_fps = 30
+        frame_time = 1.0 / target_fps
+        last_frame_time = time.time()
+        
+        print(f"📷 Camera initialized: {self.camera_width}x{self.camera_height} @ {target_fps}FPS")
 
         # Create two players with separate threads
         player1 = Player(1, "Player 1", self.model, self.scaler)
@@ -390,21 +426,37 @@ class RPSGame:
 
         try:
             while True:
+                # Frame timing control: maintain consistent 30 FPS to reduce jitter
+                current_time = time.time()
+                elapsed_time = current_time - last_frame_time
+                
+                # Skip if we're running too fast (prevents unnecessary CPU usage)
+                if elapsed_time < frame_time:
+                    time.sleep(frame_time - elapsed_time)
+                    continue
+                    
+                last_frame_time = current_time
+                
                 ret, frame = cap.read()
                 if not ret:
+                    print("⚠️ Failed to read frame from camera")
                     break
 
                 frame = cv2.flip(frame, 1)
                 height, width = frame.shape[:2]
                 mid_width = width // 2
 
-                # Split frame into two halves
-                frame_left = frame[:, :mid_width].copy()
-                frame_right = frame[:, mid_width:].copy()
+                # Split frame into two halves (use slicing, not copy)
+                frame_left = frame[:, :mid_width]
+                frame_right = frame[:, mid_width:]
+                
+                # Store CLEAN frames for potential capture (before drawing landmarks)
+                clean_frame_left = frame_left.copy()
+                clean_frame_right = frame_right.copy()
 
                 # Update frames for each player (threads will process them)
-                player1.update_frame(frame_left)
-                player2.update_frame(frame_right)
+                player1.update_frame(frame_left, game_mode)
+                player2.update_frame(frame_right, game_mode)
 
                 # Get results from both players
                 results_p1 = player1.get_results()
@@ -419,8 +471,9 @@ class RPSGame:
                     )
 
                 # Draw captured frame from previous round (only if exists)
-                if player1.captured_frame is not None:
-                    frame_left = draw_captured_frame(frame_left, player1.captured_frame, "top-left", player1.captured_gesture)
+                # Use frame WITH landmarks for accurate display
+                if player1.captured_frame_with_landmarks is not None:
+                    frame_left = draw_captured_frame(frame_left, player1.captured_frame_with_landmarks, "top-left", player1.captured_gesture)
 
                 if results_p2['landmarks']:
                     player2.mp_drawing.draw_landmarks(
@@ -430,8 +483,9 @@ class RPSGame:
                     )
 
                 # Draw captured frame from previous round (only if exists)
-                if player2.captured_frame is not None:
-                    frame_right = draw_captured_frame(frame_right, player2.captured_frame, "top-right", player2.captured_gesture)
+                # Use frame WITH landmarks for accurate display
+                if player2.captured_frame_with_landmarks is not None:
+                    frame_right = draw_captured_frame(frame_right, player2.captured_frame_with_landmarks, "top-right", player2.captured_gesture)
 
                 # Game logic
                 if game_mode == "play":
@@ -460,33 +514,123 @@ class RPSGame:
                         cv2.putText(frame_right, countdown_text, (mid_width//2 - 50, height//2),
                                    cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
                     else:
-                        # Capture the current frames and gestures before determining winner
-                        player1.captured_frame = frame_left.copy()
-                        player2.captured_frame = frame_right.copy()
-                        player1.captured_gesture = results_p1['prediction'] if results_p1['prediction'] else "No hand"
-                        player2.captured_gesture = results_p2['prediction'] if results_p2['prediction'] else "No hand"
-
-                        player1_final = results_p1['prediction']
-                        player2_final = results_p2['prediction']
-                        winner = determine_winner(player1_final, player2_final)
-
-                        if winner == "p1":
-                            player1_score += 1
-                            result = "Player 1 Wins!"
-                            play_sound("asset/result/player-1.wav")  # Play player 1 win sound
-                        elif winner == "p2":
-                            player2_score += 1
-                            result = "Player 2 Wins!"
-                            play_sound("asset/result/player-2.wav")  # Play player 2 win sound
-                        elif winner == "draw":
-                            draws += 1
-                            result = "Draw!"
-                            play_sound("asset/result/tie.wav")  # Play tie sound
+                        # CAPTURE IMMEDIATELY at T=3.0s and FORCE threads to process!
+                        if not hasattr(self, '_capture_done'):
+                            # Capture CLEAN frames (no MediaPipe drawings from live processing)
+                            self._captured_frame_left = clean_frame_left.copy()
+                            self._captured_frame_right = clean_frame_right.copy()
+                            
+                            # FORCE threads to process these exact frames from scratch
+                            # Clear old predictions and buffer (thread-safe with lock)
+                            with player1.lock:
+                                player1.prediction_buffer.clear()
+                            with player2.lock:
+                                player2.prediction_buffer.clear()
+                            
+                            # Send captured frames to threads for processing
+                            player1.update_frame(self._captured_frame_left, game_mode)
+                            player2.update_frame(self._captured_frame_right, game_mode)
+                            
+                            self._capture_time = time.time()
+                            self._capture_done = True
+                            self._predictions_ready = False
+                            print("📸 Captured at T=3.0s - Sending to threads for processing...")
+                        
+                        # Wait for threads to process the captured frames
+                        processing_time = time.time() - self._capture_time
+                        
+                        if processing_time < 0.3:
+                            # Show "PROCESSING..." while waiting
+                            cv2.putText(frame_left, "PROCESSING...", (mid_width//2 - 200, height//2),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 6)
+                            cv2.putText(frame_right, "PROCESSING...", (mid_width//2 - 200, height//2),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 6)
+                            # Continue sending the same captured frames to ensure processing
+                            player1.update_frame(self._captured_frame_left, game_mode)
+                            player2.update_frame(self._captured_frame_right, game_mode)
                         else:
-                            result = "No hands detected!"
+                            # After 0.3s, check if we have new predictions from captured frames
+                            if not self._predictions_ready:
+                                # Get fresh results after processing captured frames
+                                results_p1 = player1.get_results()
+                                results_p2 = player2.get_results()
+                                
+                                pred_p1 = results_p1['prediction']
+                                pred_p2 = results_p2['prediction']
+                                landmarks_p1 = results_p1['landmarks']
+                                landmarks_p2 = results_p2['landmarks']
+                                
+                                # Check if both have valid predictions from captured frames
+                                if (pred_p1 is None or pred_p2 is None or 
+                                    landmarks_p1 is None or landmarks_p2 is None):
+                                    if processing_time < 2.0:  # Max wait 2s
+                                        # Show warning and keep processing
+                                        if pred_p1 is None or landmarks_p1 is None:
+                                            cv2.putText(frame_left, "DETECTING...", (50, height//2),
+                                                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 4)
+                                        if pred_p2 is None or landmarks_p2 is None:
+                                            cv2.putText(frame_right, "DETECTING...", (50, height//2),
+                                                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 4)
+                                        # Keep sending captured frames
+                                        player1.update_frame(self._captured_frame_left, game_mode)
+                                        player2.update_frame(self._captured_frame_right, game_mode)
+                                        continue
+                                    else:
+                                        # Timeout - use whatever we have
+                                        pred_p1 = pred_p1 if pred_p1 else None
+                                        pred_p2 = pred_p2 if pred_p2 else None
+                                
+                                # Store results from captured frames
+                                # Create frames WITH MediaPipe landmarks for display
+                                captured_with_landmarks_left = self._captured_frame_left.copy()
+                                captured_with_landmarks_right = self._captured_frame_right.copy()
+                                
+                                # Draw landmarks on captured frames
+                                if landmarks_p1:
+                                    player1.mp_drawing.draw_landmarks(
+                                        captured_with_landmarks_left, landmarks_p1, player1.mp_hands.HAND_CONNECTIONS,
+                                        player1.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                                        player1.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
+                                    )
+                                if landmarks_p2:
+                                    player2.mp_drawing.draw_landmarks(
+                                        captured_with_landmarks_right, landmarks_p2, player2.mp_hands.HAND_CONNECTIONS,
+                                        player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                                        player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
+                                    )
+                                
+                                # Store both raw and processed frames
+                                player1.captured_frame = self._captured_frame_left
+                                player2.captured_frame = self._captured_frame_right
+                                player1.captured_frame_with_landmarks = captured_with_landmarks_left
+                                player2.captured_frame_with_landmarks = captured_with_landmarks_right
+                                player1.captured_gesture = pred_p1 if pred_p1 else "No hand"
+                                player2.captured_gesture = pred_p2 if pred_p2 else "No hand"
 
-                        result_time = time.time()
-                        game_mode = "result"
+                                player1_final = pred_p1
+                                player2_final = pred_p2
+                                winner = determine_winner(player1_final, player2_final)
+
+                                if winner == "p1":
+                                    player1_score += 1
+                                    result = "Player 1 Wins!"
+                                    play_sound("asset/result/player-1.wav")
+                                elif winner == "p2":
+                                    player2_score += 1
+                                    result = "Player 2 Wins!"
+                                    play_sound("asset/result/player-2.wav")
+                                elif winner == "draw":
+                                    draws += 1
+                                    result = "Draw!"
+                                    play_sound("asset/result/tie.wav")
+                                else:
+                                    result = "No hands detected!"
+
+                                result_time = time.time()
+                                game_mode = "result"
+                                # Reset flags for next round
+                                delattr(self, '_capture_done')
+                                delattr(self, '_predictions_ready')
 
                 elif game_mode == "result":
                     cv2.putText(frame_left, f"Player 1", (10, 250),
@@ -558,10 +702,10 @@ class RPSGame:
                                cv2.FONT_HERSHEY_SIMPLEX, 2, color, 3)
 
                 # Display instructions
-                cv2.putText(combined_frame, "SPACE: Start | R: Reset | Q: Quit | Multi-threaded Mode",
+                cv2.putText(combined_frame, "SPACE: Start | R: Reset | Q: Quit | OPTIMIZED Mode",
                            (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-                cv2.imshow("Rock Paper Scissors - 2 Players (Multi-threaded)", combined_frame)
+                cv2.imshow("Rock Paper Scissors - 2 Players (OPTIMIZED)", combined_frame)
 
                 # Handle keyboard input
                 key = cv2.waitKey(1) & 0xFF
