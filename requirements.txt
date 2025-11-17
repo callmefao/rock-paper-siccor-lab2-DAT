@@ -9,6 +9,18 @@ joblib>=1.2.0
 matplotlib>=3.7.0
 seaborn>=0.12.2
 
+# PyQt5 for GUI
+PyQt5>=5.15.9
+
+# Text-to-Speech for audio generation
+gTTS>=2.3.0
+
+# Audio playback for MP3
+pygame>=2.1.0
+
+# Image processing for Vietnamese text rendering
+Pillow>=9.0.0
+
 # Optional / dev (uncomment if you want plotting in non-GUI environments)
 # matplotlib-inline
 

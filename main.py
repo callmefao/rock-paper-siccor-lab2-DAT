@@ -17,17 +17,26 @@ from hand_feature_extractor import HandFeatureExtractor
 # =====================================
 # Audio Helper
 # =====================================
-def play_sound(wav_file):
-    """Play WAV file using Windows native API - ultra fast and non-blocking"""
+def play_sound(audio_file):
+    """Play audio file (WAV or MP3) using Windows native API or pygame - ultra fast and non-blocking"""
     def _play():
         try:
-            # SND_ASYNC = play and return immediately (fire-and-forget)
-            # SND_FILENAME = interpret wav_file as a filename
-            winsound.PlaySound(wav_file, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            if audio_file.endswith('.wav'):
+                # Use winsound for WAV files
+                # SND_ASYNC = play and return immediately (fire-and-forget)
+                # SND_FILENAME = interpret audio_file as a filename
+                winsound.PlaySound(audio_file, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            elif audio_file.endswith('.mp3'):
+                # Use pygame for MP3 files
+                import pygame
+                if not pygame.mixer.get_init():
+                    pygame.mixer.init()
+                pygame.mixer.music.load(audio_file)
+                pygame.mixer.music.play()
         except Exception as e:
-            print(f"⚠ Warning: Could not play audio {wav_file}: {e}")
+            print(f"⚠ Warning: Could not play audio {audio_file}: {e}")
 
-    # Still use thread to be extra safe, but winsound is already non-blocking
+    # Still use thread to be extra safe
     thread = threading.Thread(target=_play, daemon=True)
     thread.start()
 
@@ -181,7 +190,7 @@ class Player:
         features_scaled = self.scaler.transform([features])
         prediction = self.model.predict(features_scaled)[0]
 
-        labels = {0: "Rock", 1: "Paper", 2: "Scissors"}
+        labels = {0: "Búa", 1: "Giấy", 2: "Kéo"}
         return labels[prediction]
 
     def _get_smoothed_prediction(self):
@@ -259,7 +268,7 @@ def draw_captured_frame(frame, captured_frame, position="top-left", gesture_text
 
     # Add gesture text
     if gesture_text:
-        cv2.putText(viz_img, "Last Round:", (5, viz_size - 22),
+        cv2.putText(viz_img, "TRẬN TRƯỚC:", (5, viz_size - 22),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
         cv2.putText(viz_img, gesture_text, (5, viz_size - 6),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
@@ -331,12 +340,12 @@ def determine_winner(player1_gesture, player2_gesture):
         return "draw"
 
     win_conditions = {
-        ("Rock", "Scissors"): "p1",
-        ("Scissors", "Paper"): "p1",
-        ("Paper", "Rock"): "p1",
-        ("Scissors", "Rock"): "p2",
-        ("Paper", "Scissors"): "p2",
-        ("Rock", "Paper"): "p2"
+        ("Búa", "Kéo"): "p1",
+        ("Kéo", "Giấy"): "p1",
+        ("Giấy", "Búa"): "p1",
+        ("Kéo", "Búa"): "p2",
+        ("Giấy", "Kéo"): "p2",
+        ("Búa", "Giấy"): "p2"
     }
 
     return win_conditions.get((player1_gesture, player2_gesture), None)
