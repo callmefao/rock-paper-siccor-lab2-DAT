@@ -62,6 +62,24 @@ class RPSGameGUI:
                 print("⚠ Warning: Could not load FPT logo from asset/LogoFPT.png")
         except Exception as e:
             print(f"⚠ Warning: Error loading logo: {e}")
+        
+        # Load gesture icons
+        self.gesture_icons = {}
+        icon_paths = {
+            "Búa": "asset/icons/rock-icon.png",
+            "Giấy": "asset/icons/paper-icon.png",
+            "Kéo": "asset/icons/scissors-icon.png"
+        }
+        for gesture, path in icon_paths.items():
+            try:
+                icon = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+                if icon is not None:
+                    self.gesture_icons[gesture] = icon
+                    print(f"✓ Loaded icon for {gesture}")
+                else:
+                    print(f"⚠ Warning: Could not load icon from {path}")
+            except Exception as e:
+                print(f"⚠ Warning: Error loading icon {path}: {e}")
             
         # GUI window
         self.game_window = None
@@ -129,10 +147,10 @@ class RPSGameGUI:
         return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
     
     def draw_current_prediction(self, frame, gesture, position="top-left"):
-        """Draw current prediction text below the last round box with background box"""
+        """Draw current prediction text below the last round box with background box and icon"""
         h, w = frame.shape[:2]
         margin = 10
-        viz_size = 150
+        viz_size = 280  # Matches the captured frame box size
         box_width = viz_size
         box_height = 70
         
@@ -144,13 +162,11 @@ class RPSGameGUI:
         
         y_offset = margin + viz_size + 10  # Below the last round box
         
-        # Draw semi-transparent background box
-        overlay = frame.copy()
-        cv2.rectangle(overlay, 
+        # Draw white background box
+        cv2.rectangle(frame, 
                      (x_offset, y_offset), 
                      (x_offset + box_width, y_offset + box_height), 
-                     (30, 30, 40), -1)
-        cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
+                     (255, 255, 255), -1)  # White filled rectangle
         
         # Draw border
         cv2.rectangle(frame, 
@@ -158,26 +174,53 @@ class RPSGameGUI:
                      (x_offset + box_width, y_offset + box_height), 
                      (0, 255, 0), 2)
         
+        # Draw icon if gesture has an icon
+        icon_size = 50
+        if gesture in self.gesture_icons:
+            icon = self.gesture_icons[gesture]
+            icon_resized = cv2.resize(icon, (icon_size, icon_size))
+            
+            icon_x = x_offset + 10
+            icon_y = y_offset + 10
+            
+            # Handle transparency for icon overlay
+            if icon_resized.shape[2] == 4:  # Has alpha channel
+                alpha = icon_resized[:, :, 3] / 255.0
+                roi = frame[icon_y:icon_y+icon_size, icon_x:icon_x+icon_size]
+                
+                for c in range(3):
+                    roi[:, :, c] = (alpha * icon_resized[:, :, c] + (1 - alpha) * roi[:, :, c])
+                
+                frame[icon_y:icon_y+icon_size, icon_x:icon_x+icon_size] = roi
+            else:
+                frame[icon_y:icon_y+icon_size, icon_x:icon_x+icon_size] = icon_resized
+        
         # Use PIL for Vietnamese text
         pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(pil_img)
         
         try:
             font_label = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 16)
-            font_gesture = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 26)  # Bold
+            font_gesture = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 22)  # Slightly smaller
         except:
             try:
                 font_label = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 16)
-                font_gesture = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 26)
+                font_gesture = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 22)
             except:
                 font_label = ImageFont.load_default()
                 font_gesture = ImageFont.load_default()
         
-        # Draw label
-        draw.text((x_offset + 8, y_offset + 8), "Hiện tại:", font=font_label, fill=(255, 255, 255))
+        # Calculate centered text position for label
+        label_bbox = draw.textbbox((0, 0), "Hiện tại:", font=font_label)
+        label_width = label_bbox[2] - label_bbox[0]
+        label_x = x_offset + (box_width - label_width) // 2
         
-        # Draw gesture (centered and bigger)
-        draw.text((x_offset + 8, y_offset + 32), gesture, font=font_gesture, fill=(0, 255, 0))
+        # Draw centered label with dark text for white background
+        draw.text((label_x, y_offset + 8), "Hiện tại:", font=font_label, fill=(0, 0, 0))
+        
+        # Draw gesture text next to icon
+        text_x = x_offset + icon_size + 20 if gesture in self.gesture_icons else x_offset + 8
+        draw.text((text_x, y_offset + 32), gesture, font=font_gesture, fill=(0, 150, 0))
         
         # Convert back to OpenCV
         return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
@@ -186,6 +229,9 @@ class RPSGameGUI:
         """Initialize camera and players"""
         # Show game window
         self.game_window = self.app_manager.show_game_window()
+        
+        # Enable fullscreen mode
+        self.game_window.showFullScreen()
         
         # Initialize camera with optimized settings
         self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -251,8 +297,8 @@ class RPSGameGUI:
                 self.player1.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
             )
 
-        if self.player1.captured_frame_with_landmarks is not None:
-            frame_left = self.draw_captured_frame(frame_left, self.player1.captured_frame_with_landmarks, 
+        if self.player1.captured_frame is not None:
+            frame_left = self.draw_captured_frame(frame_left, self.player1.captured_frame, 
                                                   "top-left", self.player1.captured_gesture)
 
         if results_p2['landmarks']:
@@ -262,8 +308,8 @@ class RPSGameGUI:
                 self.player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
             )
 
-        if self.player2.captured_frame_with_landmarks is not None:
-            frame_right = self.draw_captured_frame(frame_right, self.player2.captured_frame_with_landmarks, 
+        if self.player2.captured_frame is not None:
+            frame_right = self.draw_captured_frame(frame_right, self.player2.captured_frame, 
                                                    "top-right", self.player2.captured_gesture)
 
         # Game logic
@@ -500,11 +546,11 @@ class RPSGameGUI:
         self.game_window.update_frame(combined_frame)
 
     def draw_captured_frame(self, frame, captured_frame, position="top-left", gesture_text=""):
-        """Draw captured frame from previous round"""
+        """Draw captured frame from previous round with icon"""
         if captured_frame is None:
             return frame
 
-        viz_size = 150
+        viz_size = 280  # Increased by 50% from original 187 (187 * 1.5 = 280)
         h, w = frame.shape[:2]
         margin = 10
 
@@ -515,24 +561,52 @@ class RPSGameGUI:
 
         viz_img = cv2.resize(captured_frame, (viz_size, viz_size))
 
-        overlay = viz_img.copy()
-        cv2.rectangle(overlay, (0, viz_size - 35), (viz_size, viz_size), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.7, viz_img, 0.3, 0, viz_img)
+        # Draw white rectangle at bottom for text
+        cv2.rectangle(viz_img, (0, viz_size - 60), (viz_size, viz_size), (255, 255, 255), -1)
 
         if gesture_text:
+            # Draw icon if gesture has one
+            icon_size = 45  # Increased for larger box
+            if gesture_text in self.gesture_icons:
+                icon = self.gesture_icons[gesture_text]
+                icon_resized = cv2.resize(icon, (icon_size, icon_size))
+                
+                icon_x = 8
+                icon_y = viz_size - 52
+                
+                # Handle transparency for icon overlay
+                if icon_resized.shape[2] == 4:  # Has alpha channel
+                    alpha = icon_resized[:, :, 3] / 255.0
+                    roi = viz_img[icon_y:icon_y+icon_size, icon_x:icon_x+icon_size]
+                    
+                    for c in range(3):
+                        roi[:, :, c] = (alpha * icon_resized[:, :, c] + (1 - alpha) * roi[:, :, c])
+                    
+                    viz_img[icon_y:icon_y+icon_size, icon_x:icon_x+icon_size] = roi
+                else:
+                    viz_img[icon_y:icon_y+icon_size, icon_x:icon_x+icon_size] = icon_resized
+            
             # Use PIL for Vietnamese text
             pil_img = Image.fromarray(cv2.cvtColor(viz_img, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil_img)
             
             try:
-                font_small = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 12)
-                font_medium = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 16)
+                font_small = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 16)
+                font_medium = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 20)
             except:
                 font_small = ImageFont.load_default()
                 font_medium = ImageFont.load_default()
             
-            draw.text((5, viz_size - 32), "Lượt trước:", font=font_small, fill=(255, 255, 255))
-            draw.text((5, viz_size - 16), gesture_text, font=font_medium, fill=(0, 255, 0))
+            # Calculate centered text position for label
+            label_bbox = draw.textbbox((0, 0), "Lượt trước:", font=font_small)
+            label_width = label_bbox[2] - label_bbox[0]
+            label_x = (viz_size - label_width) // 2
+            
+            draw.text((label_x, viz_size - 54), "Lượt trước:", font=font_small, fill=(0, 0, 0))
+            
+            # Draw gesture text next to icon
+            text_x = icon_size + 15 if gesture_text in self.gesture_icons else 8
+            draw.text((text_x, viz_size - 28), gesture_text, font=font_medium, fill=(0, 150, 0))
             
             viz_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
@@ -626,6 +700,12 @@ class RPSGameGUI:
         elif key == Qt.Key_N:
             # Restart game with new names
             self.restart_game()
+        elif key == Qt.Key_F11:
+            # Toggle fullscreen
+            if self.game_window.isFullScreen():
+                self.game_window.showNormal()
+            else:
+                self.game_window.showFullScreen()
 
     def reset_scores(self):
         """Reset scores only"""

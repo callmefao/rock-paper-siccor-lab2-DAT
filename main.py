@@ -249,7 +249,7 @@ def draw_captured_frame(frame, captured_frame, position="top-left", gesture_text
     if captured_frame is None:
         return frame
 
-    viz_size = 150  # Reduced from 200 to 150
+    viz_size = 180  # 
     h, w = frame.shape[:2]
     margin = 10
 
@@ -480,9 +480,9 @@ class RPSGame:
                     )
 
                 # Draw captured frame from previous round (only if exists)
-                # Use frame WITH landmarks for accurate display
-                if player1.captured_frame_with_landmarks is not None:
-                    frame_left = draw_captured_frame(frame_left, player1.captured_frame_with_landmarks, "top-left", player1.captured_gesture)
+                # Use original frame WITHOUT landmarks (clean frame)
+                if player1.captured_frame is not None:
+                    frame_left = draw_captured_frame(frame_left, player1.captured_frame, "top-left", player1.captured_gesture)
 
                 if results_p2['landmarks']:
                     player2.mp_drawing.draw_landmarks(
@@ -492,9 +492,9 @@ class RPSGame:
                     )
 
                 # Draw captured frame from previous round (only if exists)
-                # Use frame WITH landmarks for accurate display
-                if player2.captured_frame_with_landmarks is not None:
-                    frame_right = draw_captured_frame(frame_right, player2.captured_frame_with_landmarks, "top-right", player2.captured_gesture)
+                # Use original frame WITHOUT landmarks (clean frame)
+                if player2.captured_frame is not None:
+                    frame_right = draw_captured_frame(frame_right, player2.captured_frame, "top-right", player2.captured_gesture)
 
                 # Game logic
                 if game_mode == "play":

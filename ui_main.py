@@ -27,128 +27,164 @@ class PlayerNameDialog(QWidget):
         
     def init_ui(self):
         """Initialize the UI"""
-        self.setWindowTitle("Rock Paper Scissors - Player Names")
-        self.setFixedSize(600, 450)
+        self.setWindowTitle("Oẳn Tù Tì - Nhập Tên Người Chơi")
         
-        # Set background color
-        palette = self.palette()
-        palette.setColor(QPalette.Window, QColor(30, 30, 40))
-        self.setPalette(palette)
-        self.setAutoFillBackground(True)
+        # Set gradient background
+        self.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #667eea, stop:1 #764ba2);
+            }
+        """)
         
         # Main layout
         main_layout = QVBoxLayout()
-        main_layout.setSpacing(15)
-        main_layout.setContentsMargins(50, 40, 50, 40)
+        main_layout.setAlignment(Qt.AlignCenter)
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Title
-        title = QLabel("🎮 ROCK PAPER SCISSORS 🎮")
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("""
-            QLabel {
-                color: #FFD700;
-                font-size: 28px;
-                font-weight: bold;
-                padding: 20px;
+        # Center container
+        center_container = QWidget()
+        center_container.setFixedWidth(700)
+        center_container.setStyleSheet("""
+            QWidget {
+                background: white;
+                border-radius: 25px;
             }
         """)
-        main_layout.addWidget(title)
+        
+        # Content layout
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(25)
+        content_layout.setContentsMargins(50, 50, 50, 50)
+        
+        # FPT logo at top
+        fpt_container = QHBoxLayout()
+        fpt_container.setAlignment(Qt.AlignCenter)
+        
+        fpt_logo = QLabel()
+        fpt_pixmap = QPixmap("asset/LogoFPT.png")
+        if not fpt_pixmap.isNull():
+            fpt_logo.setPixmap(fpt_pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        fpt_container.addWidget(fpt_logo)
+        content_layout.addLayout(fpt_container)
+        
+        # Game icon
+        icon_container = QHBoxLayout()
+        icon_container.setAlignment(Qt.AlignCenter)
+        
+        icon_label = QLabel()
+        icon_pixmap = QPixmap("asset/icons/rock-paper-scissors.png")
+        if not icon_pixmap.isNull():
+            icon_label.setPixmap(icon_pixmap.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        icon_container.addWidget(icon_label)
+        content_layout.addLayout(icon_container)
+        
+        # Title
+        title = QLabel("OẲN TÙ TÌ")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("""
+            font-size: 48px;
+            font-weight: bold;
+            color: #2d3436;
+            margin: 10px 0px;
+        """)
+        content_layout.addWidget(title)
         
         # Subtitle
         subtitle = QLabel("Nhập tên người chơi để bắt đầu")
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setStyleSheet("""
-            QLabel {
-                color: #FFFFFF;
-                font-size: 16px;
-                padding: 10px;
-            }
+            font-size: 18px;
+            color: #636e72;
+            margin-bottom: 20px;
         """)
-        main_layout.addWidget(subtitle)
+        content_layout.addWidget(subtitle)
         
-        # Player 1 input
-        player1_label = QLabel("👤 Player 1:")
-        player1_label.setStyleSheet("""
-            QLabel {
-                color: #00FFFF;
-                font-size: 18px;
-                font-weight: bold;
-            }
+        # Player 1
+        p1_label = QLabel("👤 Người Chơi 1:")
+        p1_label.setStyleSheet("""
+            font-size: 20px;
+            font-weight: bold;
+            color: #0984e3;
+            margin-top: 10px;
         """)
-        main_layout.addWidget(player1_label)
+        content_layout.addWidget(p1_label)
         
         self.player1_input = QLineEdit()
-        self.player1_input.setPlaceholderText("Nhập tên Player 1...")
+        self.player1_input.setPlaceholderText("Nhập tên Người Chơi 1...")
         self.player1_input.setStyleSheet("""
             QLineEdit {
-                background-color: #1E1E2E;
-                color: #FFFFFF;
-                border: 2px solid #00FFFF;
-                border-radius: 8px;
-                padding: 10px 15px;
-                font-size: 15px;
-                min-height: 20px;
+                padding: 15px 20px;
+                font-size: 18px;
+                border: 2px solid #0984e3;
+                border-radius: 10px;
+                background: #f8f9fa;
+                color: #2d3436;
             }
             QLineEdit:focus {
-                border: 2px solid #FFD700;
+                border: 2px solid #74b9ff;
+                background: white;
             }
         """)
-        main_layout.addWidget(self.player1_input)
+        content_layout.addWidget(self.player1_input)
         
-        # Player 2 input
-        player2_label = QLabel("👤 Player 2:")
-        player2_label.setStyleSheet("""
-            QLabel {
-                color: #FFA500;
-                font-size: 18px;
-                font-weight: bold;
-            }
+        # Player 2
+        p2_label = QLabel("👤 Người Chơi 2:")
+        p2_label.setStyleSheet("""
+            font-size: 20px;
+            font-weight: bold;
+            color: #fd79a8;
+            margin-top: 15px;
         """)
-        main_layout.addWidget(player2_label)
+        content_layout.addWidget(p2_label)
         
         self.player2_input = QLineEdit()
-        self.player2_input.setPlaceholderText("Nhập tên Player 2...")
+        self.player2_input.setPlaceholderText("Nhập tên Người Chơi 2...")
         self.player2_input.setStyleSheet("""
             QLineEdit {
-                background-color: #1E1E2E;
-                color: #FFFFFF;
-                border: 2px solid #FFA500;
-                border-radius: 8px;
-                padding: 10px 15px;
-                font-size: 15px;
-                min-height: 20px;
+                padding: 15px 20px;
+                font-size: 18px;
+                border: 2px solid #fd79a8;
+                border-radius: 10px;
+                background: #f8f9fa;
+                color: #2d3436;
             }
             QLineEdit:focus {
-                border: 2px solid #FFD700;
+                border: 2px solid #fab1a0;
+                background: white;
             }
         """)
-        main_layout.addWidget(self.player2_input)
+        content_layout.addWidget(self.player2_input)
         
         # Start button
         self.start_button = QPushButton("🚀 BẮT ĐẦU")
         self.start_button.setStyleSheet("""
             QPushButton {
-                background-color: #28A745;
-                color: white;
-                border: none;
-                border-radius: 10px;
-                padding: 15px;
-                font-size: 20px;
+                padding: 18px;
+                font-size: 24px;
                 font-weight: bold;
+                color: white;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00b894, stop:1 #00cec9);
+                border: none;
+                border-radius: 12px;
+                margin-top: 20px;
             }
             QPushButton:hover {
-                background-color: #218838;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00a085, stop:1 #00b5b0);
             }
             QPushButton:pressed {
-                background-color: #1E7E34;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #008c75, stop:1 #009c98);
             }
         """)
         self.start_button.clicked.connect(self.submit_names)
-        main_layout.addWidget(self.start_button)
+        content_layout.addWidget(self.start_button)
         
-        # Add stretch to push everything up
-        main_layout.addStretch()
-        
+        center_container.setLayout(content_layout)
+        main_layout.addWidget(center_container)
         self.setLayout(main_layout)
         
         # Connect Enter key to submit
@@ -186,71 +222,108 @@ class LoadingScreen(QWidget):
         
     def init_ui(self):
         """Initialize the UI"""
-        self.setWindowTitle("Rock Paper Scissors - Loading")
-        self.setFixedSize(800, 500)
+        self.setWindowTitle("Oẳn Tù Tì - Đang Tải")
         
-        # Set background color
-        palette = self.palette()
-        palette.setColor(QPalette.Window, QColor(20, 20, 30))
-        self.setPalette(palette)
-        self.setAutoFillBackground(True)
+        # Set gradient background
+        self.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #667eea, stop:1 #764ba2);
+            }
+        """)
         
         # Main layout
         main_layout = QVBoxLayout()
-        main_layout.setSpacing(30)
-        main_layout.setContentsMargins(50, 80, 50, 80)
+        main_layout.setAlignment(Qt.AlignCenter)
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Loading icon
-        icon_label = QLabel("⏳")
-        icon_label.setAlignment(Qt.AlignCenter)
-        icon_label.setStyleSheet("""
-            QLabel {
-                font-size: 80px;
+        # Center container
+        center_container = QWidget()
+        center_container.setFixedWidth(800)
+        center_container.setStyleSheet("""
+            QWidget {
+                background: white;
+                border-radius: 25px;
             }
         """)
-        main_layout.addWidget(icon_label)
+        
+        # Content layout
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(25)
+        content_layout.setContentsMargins(60, 60, 60, 60)
+        
+        # Game icon
+        icon_container = QHBoxLayout()
+        icon_container.setAlignment(Qt.AlignCenter)
+        
+        game_icon = QLabel()
+        icon_pixmap = QPixmap("asset/icons/rock-paper-scissors.png")
+        if not icon_pixmap.isNull():
+            game_icon.setPixmap(icon_pixmap.scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        icon_container.addWidget(game_icon)
+        content_layout.addLayout(icon_container)
+        
+        # Loading animation icon
+        loading_icon = QLabel("⏳")
+        loading_icon.setAlignment(Qt.AlignCenter)
+        loading_icon.setStyleSheet("font-size: 80px;")
+        content_layout.addWidget(loading_icon)
         
         # Loading text
         self.loading_label = QLabel("Đang khởi tạo trò chơi")
         self.loading_label.setAlignment(Qt.AlignCenter)
         self.loading_label.setStyleSheet("""
-            QLabel {
-                color: #00FFFF;
-                font-size: 28px;
-                font-weight: bold;
-                padding: 20px;
-            }
+            font-size: 32px;
+            font-weight: bold;
+            color: #2d3436;
+            margin: 15px 0px;
         """)
-        main_layout.addWidget(self.loading_label)
+        content_layout.addWidget(self.loading_label)
+        
+        # Player names section
+        names_section = QWidget()
+        names_section.setStyleSheet("""
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #667eea, stop:1 #764ba2);
+            border-radius: 15px;
+            padding: 20px;
+        """)
+        names_layout = QHBoxLayout()
+        names_layout.setAlignment(Qt.AlignCenter)
+        names_layout.setSpacing(15)
+        
+        # FPT Logo
+        fpt_logo = QLabel()
+        fpt_pixmap = QPixmap("asset/LogoFPT.png")
+        if not fpt_pixmap.isNull():
+            fpt_logo.setPixmap(fpt_pixmap.scaled(50, 50, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            names_layout.addWidget(fpt_logo)
         
         # Player names
-        names_label = QLabel(f"🎮 {self.player1_name} vs {self.player2_name} 🎮")
-        names_label.setAlignment(Qt.AlignCenter)
+        names_label = QLabel(f"{self.player1_name} vs {self.player2_name}")
         names_label.setStyleSheet("""
-            QLabel {
-                color: #FFD700;
-                font-size: 20px;
-                font-weight: bold;
-                padding: 10px;
-            }
+            font-size: 26px;
+            font-weight: bold;
+            color: white;
         """)
-        main_layout.addWidget(names_label)
+        names_layout.addWidget(names_label)
+        
+        names_section.setLayout(names_layout)
+        content_layout.addWidget(names_section)
         
         # Progress text
         self.progress_label = QLabel("Đang chuẩn bị camera và AI model...")
         self.progress_label.setAlignment(Qt.AlignCenter)
         self.progress_label.setStyleSheet("""
-            QLabel {
-                color: #AAAAAA;
-                font-size: 14px;
-                padding: 10px;
-            }
+            font-size: 18px;
+            color: #636e72;
+            margin-top: 10px;
         """)
-        main_layout.addWidget(self.progress_label)
+        content_layout.addWidget(self.progress_label)
         
-        # Add stretch
-        main_layout.addStretch()
-        
+        center_container.setLayout(content_layout)
+        main_layout.addWidget(center_container)
         self.setLayout(main_layout)
         
         # Animation timer for dots
@@ -581,14 +654,14 @@ class RPSApplication:
         """Show player name input dialog"""
         self.name_dialog = PlayerNameDialog()
         self.name_dialog.names_submitted.connect(self.on_names_submitted)
-        self.name_dialog.show()
+        self.name_dialog.showFullScreen()
     
     def show_name_dialog_for_restart(self, game_instance):
         """Show player name input dialog for restart"""
         self.game_instance = game_instance
         self.name_dialog = PlayerNameDialog()
         self.name_dialog.names_submitted.connect(self.on_names_submitted_restart)
-        self.name_dialog.show()
+        self.name_dialog.showFullScreen()
         
     def on_names_submitted(self, player1_name, player2_name):
         """Handle player names submission"""
@@ -606,7 +679,7 @@ class RPSApplication:
         # Show loading screen for restart
         self.loading_screen = LoadingScreen(self.player1_name, self.player2_name)
         self.loading_screen.loading_complete.connect(self.on_restart_loading_complete)
-        self.loading_screen.show()
+        self.loading_screen.showFullScreen()
     
     def on_restart_loading_complete(self):
         """Handle restart loading completion"""
@@ -633,7 +706,7 @@ class RPSApplication:
         """Show loading screen"""
         self.loading_screen = LoadingScreen(self.player1_name, self.player2_name)
         self.loading_screen.loading_complete.connect(self.on_loading_complete)
-        self.loading_screen.show()
+        self.loading_screen.showFullScreen()
         
     def on_loading_complete(self):
         """Handle loading completion"""
