@@ -38,6 +38,7 @@ class RPSGameGUI:
             countdown_duration: Duration of countdown in seconds
         """
         self.app_manager = app_manager
+        self.audio_manager = app_manager.audio_manager  # Store audio manager reference
         
         # Load trained model and scaler
         self.model = load(model_path)
@@ -428,15 +429,15 @@ class RPSGameGUI:
                         if winner == "p1":
                             self.player1_score += 1
                             self.result = f"{self.app_manager.player1_name} Thắng!"
-                            play_sound("asset/result/player-1.mp3")
+                            self.audio_manager.play_winner_sound("asset/result/player-1.mp3")
                         elif winner == "p2":
                             self.player2_score += 1
                             self.result = f"{self.app_manager.player2_name} Thắng!"
-                            play_sound("asset/result/player-2.mp3")
+                            self.audio_manager.play_winner_sound("asset/result/player-2.mp3")
                         elif winner == "draw":
                             self.draws += 1
                             self.result = "Hòa!"
-                            play_sound("asset/result/tie.wav")
+                            self.audio_manager.play_winner_sound("asset/result/tie.wav")
                         else:
                             self.result = "Không phát hiện tay!"
 
@@ -694,6 +695,8 @@ class RPSGameGUI:
             self.game_mode = "countdown"
             self.countdown_start = time.time()
             self.result = ""
+            # Play countdown sound and fade background music
+            self.audio_manager.play_countdown_sound()
         elif key == Qt.Key_R:
             # Reset scores only
             self.reset_scores()
@@ -753,6 +756,9 @@ class RPSGameGUI:
         # Release camera
         if self.cap:
             self.cap.release()
+        
+        # Stop all audio
+        self.audio_manager.stop_all()
         
         # Print final scores
         print("\n🏆 FINAL SCORES")

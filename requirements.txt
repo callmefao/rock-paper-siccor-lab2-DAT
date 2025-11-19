@@ -8,7 +8,7 @@ scikit-learn>=1.2.2
 joblib>=1.2.0
 matplotlib>=3.7.0
 seaborn>=0.12.2
-
+playsound==1.2.2
 # PyQt5 for GUI
 PyQt5>=5.15.9
 

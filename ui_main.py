@@ -12,6 +12,108 @@ from PyQt5.QtGui import QImage, QPixmap, QFont, QPalette, QColor
 import cv2
 import numpy as np
 from gtts import gTTS
+import threading
+import winsound
+import pygame
+import os
+
+
+# =====================================
+# Audio Manager
+# =====================================
+class AudioManager:
+    """Manages background music and sound effects with volume control (pygame + winsound)"""
+    
+    def __init__(self):
+        # Initialize pygame mixer
+        pygame.mixer.init()
+        self.bg_music_playing = False
+        self.normal_volume = 0.3  # Giảm volume xuống 30%
+        self.fade_volume = 0.05    # Faded volume 5% (thay vì 10%)
+        self.fade_timer = None
+        self.fade_duration = 10.0  # Fade duration in seconds
+        
+    def start_background_music(self):
+        """Start playing background music in loop"""
+        try:
+            if not self.bg_music_playing:
+                pygame.mixer.music.load("asset/sound/bg-sound.mp3")
+                pygame.mixer.music.set_volume(self.normal_volume)
+                pygame.mixer.music.play(-1)  # Loop indefinitely
+                self.bg_music_playing = True
+                print(f"🎵 Background music started at {self.normal_volume*100}% volume")
+        except Exception as e:
+            print(f"⚠ Warning: Could not start background music: {e}")
+    
+    def play_countdown_sound(self):
+        """Play countdown sound and fade background music"""
+        try:
+            # Cancel old timer if exists (người chơi nhấn SPACE liên tục)
+            if self.fade_timer:
+                self.fade_timer.cancel()
+                print("⏱️  Timer reset - old timer cancelled")
+            
+            # Fade background music down
+            self.fade_bg_music_down()
+            
+            # Play countdown sound using winsound (non-blocking)
+            def _play():
+                winsound.PlaySound("asset/sound/countdown-1.wav", 
+                                 winsound.SND_FILENAME | winsound.SND_ASYNC)
+            
+            thread = threading.Thread(target=_play, daemon=True)
+            thread.start()
+            print("🔊 Countdown sound played")
+            
+            # Schedule fade up after 10 seconds (thay vì 5 giây)
+            self.fade_timer = threading.Timer(self.fade_duration, self.fade_bg_music_up)
+            self.fade_timer.start()
+            print(f"⏱️  New timer started - will restore volume in {self.fade_duration}s")
+            
+        except Exception as e:
+            print(f"⚠ Warning: Could not play countdown sound: {e}")
+    
+    def play_winner_sound(self, sound_file):
+        """Play winner sound at full volume (không bị fade)"""
+        try:
+            # Tạm thời tăng volume lên để nghe rõ âm thanh chiến thắng
+            def _play():
+                winner_sound = pygame.mixer.Sound(sound_file)
+                winner_sound.set_volume(0.7)  # 70% volume - rõ ràng
+                winner_sound.play()
+                print(f"🎉 Winner sound played at full volume: {sound_file}")
+            
+            thread = threading.Thread(target=_play, daemon=True)
+            thread.start()
+        except Exception as e:
+            print(f"⚠ Warning: Could not play winner sound: {e}")
+    
+    def fade_bg_music_down(self):
+        """Fade background music volume down"""
+        try:
+            pygame.mixer.music.set_volume(self.fade_volume)
+            print(f"🔉 Background music faded to {self.fade_volume*100}%")
+        except Exception as e:
+            print(f"⚠ Warning: Could not fade down music: {e}")
+    
+    def fade_bg_music_up(self):
+        """Fade background music volume back up"""
+        try:
+            pygame.mixer.music.set_volume(self.normal_volume)
+            print(f"🔊 Background music restored to {self.normal_volume*100}%")
+        except Exception as e:
+            print(f"⚠ Warning: Could not fade up music: {e}")
+    
+    def stop_all(self):
+        """Stop all audio"""
+        try:
+            if self.fade_timer:
+                self.fade_timer.cancel()
+            pygame.mixer.music.stop()
+            self.bg_music_playing = False
+            print("🔇 All audio stopped")
+        except Exception as e:
+            print(f"⚠ Warning: Could not stop audio: {e}")
 
 
 # =====================================
@@ -644,9 +746,13 @@ class RPSApplication:
         self.player1_name = "Player 1"
         self.player2_name = "Player 2"
         self.game_window = None
+        self.audio_manager = AudioManager()
         
     def start(self):
         """Start the application"""
+        # Start background music
+        self.audio_manager.start_background_music()
+        
         # Show name input dialog
         self.show_name_dialog()
         
