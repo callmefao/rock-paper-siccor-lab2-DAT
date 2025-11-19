@@ -28,10 +28,11 @@ class AudioManager:
         # Initialize pygame mixer
         pygame.mixer.init()
         self.bg_music_playing = False
-        self.normal_volume = 0.3  # Giảm volume xuống 30%
+        self.normal_volume = 0.15  # Giảm volume xuống 15% (thay vì 30%)
         self.fade_volume = 0.05    # Faded volume 5% (thay vì 10%)
         self.fade_timer = None
         self.fade_duration = 10.0  # Fade duration in seconds
+        self.sound_cache = {}  # Cache để lưu pygame.mixer.Sound objects
         
     def start_background_music(self):
         """Start playing background music in loop"""
@@ -58,7 +59,7 @@ class AudioManager:
             
             # Play countdown sound using winsound (non-blocking)
             def _play():
-                winsound.PlaySound("asset/sound/countdown-1.wav", 
+                winsound.PlaySound("asset/sound/countdown.wav", 
                                  winsound.SND_FILENAME | winsound.SND_ASYNC)
             
             thread = threading.Thread(target=_play, daemon=True)
@@ -73,12 +74,21 @@ class AudioManager:
         except Exception as e:
             print(f"⚠ Warning: Could not play countdown sound: {e}")
     
+    def clear_sound_cache(self):
+        """Clear sound cache để reload file mới sau khi đổi tên"""
+        self.sound_cache.clear()
+        print("🔄 Sound cache cleared - sẽ load file mới")
+    
     def play_winner_sound(self, sound_file):
         """Play winner sound at full volume (không bị fade)"""
         try:
-            # Tạm thời tăng volume lên để nghe rõ âm thanh chiến thắng
             def _play():
-                winner_sound = pygame.mixer.Sound(sound_file)
+                # Load từ cache, hoặc tạo mới nếu chưa có
+                if sound_file not in self.sound_cache:
+                    self.sound_cache[sound_file] = pygame.mixer.Sound(sound_file)
+                    print(f"📁 Loaded new sound into cache: {sound_file}")
+                
+                winner_sound = self.sound_cache[sound_file]
                 winner_sound.set_volume(0.7)  # 70% volume - rõ ràng
                 winner_sound.play()
                 print(f"🎉 Winner sound played at full volume: {sound_file}")
@@ -454,12 +464,12 @@ class LoadingScreen(QWidget):
             # Ensure result directory exists
             os.makedirs("asset/result", exist_ok=True)
             
-            # Generate audio for Player 1
+            # Generate audio for Player 1 (ghi đè file cũ)
             text_p1 = f"Chúc mừng người chơi {self.player1_name} chiến thắng"
             tts_p1 = gTTS(text=text_p1, lang='vi', slow=False)
             tts_p1.save("asset/result/player-1.mp3")
             
-            # Generate audio for Player 2
+            # Generate audio for Player 2 (ghi đè file cũ)
             text_p2 = f"Chúc mừng người chơi {self.player2_name} chiến thắng"
             tts_p2 = gTTS(text=text_p2, lang='vi', slow=False)
             tts_p2.save("asset/result/player-2.mp3")
@@ -789,6 +799,9 @@ class RPSApplication:
     
     def on_restart_loading_complete(self):
         """Handle restart loading completion"""
+        # Clear sound cache để load file âm thanh mới
+        self.audio_manager.clear_sound_cache()
+        
         # Update player names in game instance
         if hasattr(self, 'game_instance'):
             self.game_instance.player1.name = self.player1_name
@@ -806,7 +819,7 @@ class RPSApplication:
             # Restart timer
             self.game_instance.timer.start(self.game_instance.timer_interval)
             
-            self.game_instance.game_window.update_status("Trò chơi đã khởi động lại!", "#00FF00")
+            self.game_instance.game_window.update_status("Đã cập nhật tên người chơi!", "#00FF00")
         
     def show_loading_screen(self):
         """Show loading screen"""
