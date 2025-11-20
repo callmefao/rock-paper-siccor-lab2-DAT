@@ -33,6 +33,14 @@ class AudioManager:
         self.fade_timer = None
         self.fade_duration = 10.0  # Fade duration in seconds
         self.sound_cache = {}  # Cache để lưu pygame.mixer.Sound objects
+    
+    def __del__(self):
+        """Destructor to ensure cleanup when object is destroyed"""
+        try:
+            self.stop_all()
+        except Exception as e:
+            # Silently handle errors during cleanup
+            pass
         
     def start_background_music(self):
         """Start playing background music in loop"""
@@ -115,13 +123,22 @@ class AudioManager:
             print(f"⚠ Warning: Could not fade up music: {e}")
     
     def stop_all(self):
-        """Stop all audio"""
+        """Stop all audio and cleanup resources"""
         try:
+            # Cancel fade timer if exists
             if self.fade_timer:
                 self.fade_timer.cancel()
-            pygame.mixer.music.stop()
-            self.bg_music_playing = False
-            print("🔇 All audio stopped")
+                self.fade_timer = None
+            
+            # Stop background music
+            if self.bg_music_playing:
+                pygame.mixer.music.stop()
+                self.bg_music_playing = False
+            
+            # Clear sound cache to free memory
+            self.sound_cache.clear()
+            
+            print("🔇 All audio stopped and resources cleaned up")
         except Exception as e:
             print(f"⚠ Warning: Could not stop audio: {e}")
 
