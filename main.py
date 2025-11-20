@@ -425,6 +425,14 @@ class RPSGame:
         result = ""
         result_time = None
 
+        # Capture state (thread-safe)
+        capture_state = {
+            'done': False,
+            'predictions_ready': False,
+            'capture_time': None,
+            'captured_frames': {'left': None, 'right': None}
+        }
+
         # Score tracking
         player1_score = 0
         player2_score = 0
@@ -524,10 +532,10 @@ class RPSGame:
                                    cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
                     else:
                         # CAPTURE IMMEDIATELY at T=3.0s and FORCE threads to process!
-                        if not hasattr(self, '_capture_done'):
+                        if not capture_state['done']:
                             # Capture CLEAN frames (no MediaPipe drawings from live processing)
-                            self._captured_frame_left = clean_frame_left.copy()
-                            self._captured_frame_right = clean_frame_right.copy()
+                            capture_state['captured_frames']['left'] = clean_frame_left.copy()
+                            capture_state['captured_frames']['right'] = clean_frame_right.copy()
                             
                             # FORCE threads to process these exact frames from scratch
                             # Clear old predictions and buffer (thread-safe with lock)
@@ -537,16 +545,16 @@ class RPSGame:
                                 player2.prediction_buffer.clear()
                             
                             # Send captured frames to threads for processing
-                            player1.update_frame(self._captured_frame_left, game_mode)
-                            player2.update_frame(self._captured_frame_right, game_mode)
+                            player1.update_frame(capture_state['captured_frames']['left'], game_mode)
+                            player2.update_frame(capture_state['captured_frames']['right'], game_mode)
                             
-                            self._capture_time = time.time()
-                            self._capture_done = True
-                            self._predictions_ready = False
+                            capture_state['capture_time'] = time.time()
+                            capture_state['done'] = True
+                            capture_state['predictions_ready'] = False
                             print("📸 Captured at T=3.0s - Sending to threads for processing...")
                         
                         # Wait for threads to process the captured frames
-                        processing_time = time.time() - self._capture_time
+                        processing_time = time.time() - capture_state['capture_time']
                         
                         if processing_time < 0.3:
                             # Show "PROCESSING..." while waiting
@@ -555,11 +563,11 @@ class RPSGame:
                             cv2.putText(frame_right, "PROCESSING...", (mid_width//2 - 200, height//2),
                                        cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 6)
                             # Continue sending the same captured frames to ensure processing
-                            player1.update_frame(self._captured_frame_left, game_mode)
-                            player2.update_frame(self._captured_frame_right, game_mode)
+                            player1.update_frame(capture_state['captured_frames']['left'], game_mode)
+                            player2.update_frame(capture_state['captured_frames']['right'], game_mode)
                         else:
                             # After 0.3s, check if we have new predictions from captured frames
-                            if not self._predictions_ready:
+                            if not capture_state['predictions_ready']:
                                 # Get fresh results after processing captured frames
                                 results_p1 = player1.get_results()
                                 results_p2 = player2.get_results()
@@ -581,8 +589,8 @@ class RPSGame:
                                             cv2.putText(frame_right, "DETECTING...", (50, height//2),
                                                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 4)
                                         # Keep sending captured frames
-                                        player1.update_frame(self._captured_frame_left, game_mode)
-                                        player2.update_frame(self._captured_frame_right, game_mode)
+                                        player1.update_frame(capture_state['captured_frames']['left'], game_mode)
+                                        player2.update_frame(capture_state['captured_frames']['right'], game_mode)
                                         continue
                                     else:
                                         # Timeout - use whatever we have
@@ -591,8 +599,8 @@ class RPSGame:
                                 
                                 # Store results from captured frames
                                 # Create frames WITH MediaPipe landmarks for display
-                                captured_with_landmarks_left = self._captured_frame_left.copy()
-                                captured_with_landmarks_right = self._captured_frame_right.copy()
+                                captured_with_landmarks_left = capture_state['captured_frames']['left'].copy()
+                                captured_with_landmarks_right = capture_state['captured_frames']['right'].copy()
                                 
                                 # Draw landmarks on captured frames
                                 if landmarks_p1:
@@ -609,8 +617,8 @@ class RPSGame:
                                     )
                                 
                                 # Store both raw and processed frames
-                                player1.captured_frame = self._captured_frame_left
-                                player2.captured_frame = self._captured_frame_right
+                                player1.captured_frame = capture_state['captured_frames']['left']
+                                player2.captured_frame = capture_state['captured_frames']['right']
                                 player1.captured_frame_with_landmarks = captured_with_landmarks_left
                                 player2.captured_frame_with_landmarks = captured_with_landmarks_right
                                 player1.captured_gesture = pred_p1 if pred_p1 else "No hand"
@@ -637,9 +645,9 @@ class RPSGame:
 
                                 result_time = time.time()
                                 game_mode = "result"
-                                # Reset flags for next round
-                                delattr(self, '_capture_done')
-                                delattr(self, '_predictions_ready')
+                                # Reset capture state for next round
+                                capture_state['done'] = False
+                                capture_state['predictions_ready'] = False
 
                 elif game_mode == "result":
                     cv2.putText(frame_left, f"Player 1", (10, 250),

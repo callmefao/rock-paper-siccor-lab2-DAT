@@ -100,6 +100,14 @@ class RPSGameGUI:
         self.result = ""
         self.result_time = None
         
+        # Capture state (thread-safe)
+        self.capture_state = {
+            'done': False,
+            'predictions_ready': False,
+            'capture_time': None,
+            'captured_frames': {'left': None, 'right': None}
+        }
+        
         # Score tracking
         self.player1_score = 0
         self.player2_score = 0
@@ -341,23 +349,23 @@ class RPSGameGUI:
                 self.game_window.update_status(f"Chuẩn bị... {countdown_text}", "#00FFFF")
             else:
                 # Capture and process logic (same as original)
-                if not hasattr(self, '_capture_done'):
-                    self._captured_frame_left = clean_frame_left.copy()
-                    self._captured_frame_right = clean_frame_right.copy()
+                if not self.capture_state['done']:
+                    self.capture_state['captured_frames']['left'] = clean_frame_left.copy()
+                    self.capture_state['captured_frames']['right'] = clean_frame_right.copy()
                     
                     with self.player1.lock:
                         self.player1.prediction_buffer.clear()
                     with self.player2.lock:
                         self.player2.prediction_buffer.clear()
                     
-                    self.player1.update_frame(self._captured_frame_left, self.game_mode)
-                    self.player2.update_frame(self._captured_frame_right, self.game_mode)
+                    self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode)
+                    self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode)
                     
-                    self._capture_time = time.time()
-                    self._capture_done = True
-                    self._predictions_ready = False
+                    self.capture_state['capture_time'] = time.time()
+                    self.capture_state['done'] = True
+                    self.capture_state['predictions_ready'] = False
                 
-                processing_time = time.time() - self._capture_time
+                processing_time = time.time() - self.capture_state['capture_time']
                 
                 if processing_time < 0.3:
                     cv2.putText(frame_left, "PROCESSING...", (mid_width//2 - 200, height//2),
@@ -367,10 +375,10 @@ class RPSGameGUI:
                     
                     self.game_window.update_status("Đang xử lý...", "#00FFFF")
                     
-                    self.player1.update_frame(self._captured_frame_left, self.game_mode)
-                    self.player2.update_frame(self._captured_frame_right, self.game_mode)
+                    self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode)
+                    self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode)
                 else:
-                    if not self._predictions_ready:
+                    if not self.capture_state['predictions_ready']:
                         results_p1 = self.player1.get_results()
                         results_p2 = self.player2.get_results()
                         
@@ -391,16 +399,16 @@ class RPSGameGUI:
                                 
                                 self.game_window.update_status("Đang phát hiện...", "#FFA500")
                                 
-                                self.player1.update_frame(self._captured_frame_left, self.game_mode)
-                                self.player2.update_frame(self._captured_frame_right, self.game_mode)
+                                self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode)
+                                self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode)
                                 return
                             else:
                                 pred_p1 = pred_p1 if pred_p1 else None
                                 pred_p2 = pred_p2 if pred_p2 else None
                         
                         # Store results
-                        captured_with_landmarks_left = self._captured_frame_left.copy()
-                        captured_with_landmarks_right = self._captured_frame_right.copy()
+                        captured_with_landmarks_left = self.capture_state['captured_frames']['left'].copy()
+                        captured_with_landmarks_right = self.capture_state['captured_frames']['right'].copy()
                         
                         if landmarks_p1:
                             self.player1.mp_drawing.draw_landmarks(
@@ -415,8 +423,8 @@ class RPSGameGUI:
                                 self.player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
                             )
                         
-                        self.player1.captured_frame = self._captured_frame_left
-                        self.player2.captured_frame = self._captured_frame_right
+                        self.player1.captured_frame = self.capture_state['captured_frames']['left']
+                        self.player2.captured_frame = self.capture_state['captured_frames']['right']
                         self.player1.captured_frame_with_landmarks = captured_with_landmarks_left
                         self.player2.captured_frame_with_landmarks = captured_with_landmarks_right
                         self.player1.captured_gesture = pred_p1 if pred_p1 else "Không có tay"
@@ -447,8 +455,9 @@ class RPSGameGUI:
                         # Update GUI scores
                         self.game_window.update_scores(self.player1_score, self.player2_score, self.draws)
                         
-                        delattr(self, '_capture_done')
-                        delattr(self, '_predictions_ready')
+                        # Reset capture state for next round
+                        self.capture_state['done'] = False
+                        self.capture_state['predictions_ready'] = False
 
         elif self.game_mode == "result":
             # Draw current prediction below last round box for player 1
