@@ -121,27 +121,29 @@ class Player:
                 continue
             self.frame_ready.clear()
 
-            # Get frame to process
+            # Get frame to process (minimize lock scope)
             with self.lock:
-                if self.frame is None:
-                    continue
-                frame_to_process = self.frame
-                current_game_mode = self.game_mode
+                frame_snapshot = self.frame
+                mode_snapshot = self.game_mode
+            
+            # Check frame validity outside lock
+            if frame_snapshot is None:
+                continue
             
             # Adaptive frame skipping based on game mode
             frame_skip_counter += 1
-            if current_game_mode == "countdown":
+            if mode_snapshot == "countdown":
                 # During countdown, process every 3rd frame to save CPU
                 if frame_skip_counter % 3 != 0:
                     continue
-            elif current_game_mode == "result":
+            elif mode_snapshot == "result":
                 # During result display, process every 5th frame
                 if frame_skip_counter % 5 != 0:
                     continue
             # In "play" mode, process every frame for real-time feedback
 
             # Process frame with SINGLE MediaPipe call
-            features, landmarks = self._extract_features_optimized(frame_to_process)
+            features, landmarks = self._extract_features_optimized(frame_snapshot)
 
             # Predict gesture
             prediction = None
