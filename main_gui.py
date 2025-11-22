@@ -39,6 +39,22 @@ class RPSGameGUI:
         """
         self.app_manager = app_manager
         self.audio_manager = app_manager.audio_manager  # Store audio manager reference
+        self.game_mode = app_manager.game_mode  # "single" or "two"
+        
+        # AI bot images
+        self.bot_images = {}
+        if self.game_mode == "single":
+            try:
+                self.bot_images['rule'] = cv2.imread("asset/bot-play/rule.jpg")
+                self.bot_images['rock'] = cv2.imread("asset/bot-play/rock.jpg")
+                self.bot_images['paper'] = cv2.imread("asset/bot-play/paper.jpg")
+                self.bot_images['scissors'] = cv2.imread("asset/bot-play/sisscors.jpg")
+                print("✓ Bot images loaded successfully")
+            except Exception as e:
+                print(f"⚠ Warning: Could not load bot images: {e}")
+        
+        # AI bot gesture (for single player mode)
+        self.bot_gesture = None
         
         # Load trained model and scaler
         self.model = load(model_path)
@@ -93,7 +109,7 @@ class RPSGameGUI:
         self.player2 = None
         
         # Game state
-        self.game_mode = "play"
+        self.game_mode_state = "play"  # Renamed to avoid conflict with self.game_mode (single/two)
         self.countdown_start = None
         self.player1_final = None
         self.player2_final = None
@@ -256,11 +272,15 @@ class RPSGameGUI:
         
         # Create players
         self.player1 = Player(1, self.app_manager.player1_name, self.model, self.scaler)
-        self.player2 = Player(2, self.app_manager.player2_name, self.model, self.scaler)
+        
+        if self.game_mode == "two":
+            self.player2 = Player(2, self.app_manager.player2_name, self.model, self.scaler)
+            self.player2.start()
+        else:
+            self.player2 = None  # No player 2 in single player mode
         
         # Start processing threads
         self.player1.start()
-        self.player2.start()
         
         # Connect keyboard events
         self.game_window.keyPressEvent = self.handle_key_press
@@ -290,15 +310,19 @@ class RPSGameGUI:
         clean_frame_left = frame_left.copy()
         clean_frame_right = frame_right.copy()
 
-        # Update frames for each player
+        # Update frames for player 1
         self.player1.update_frame(frame_left, self.game_mode)
-        self.player2.update_frame(frame_right, self.game_mode)
-
-        # Get results from both players
         results_p1 = self.player1.get_results()
-        results_p2 = self.player2.get_results()
 
-        # Draw hand landmarks
+        # For two-player mode, process player 2
+        if self.game_mode == "two":
+            self.player2.update_frame(frame_right, self.game_mode)
+            results_p2 = self.player2.get_results()
+        else:
+            # Single player mode - no processing for right side
+            results_p2 = {'features': None, 'landmarks': None, 'prediction': None}
+
+        # Draw hand landmarks for player 1
         if results_p1['landmarks']:
             self.player1.mp_drawing.draw_landmarks(
                 frame_left, results_p1['landmarks'], self.player1.mp_hands.HAND_CONNECTIONS,
@@ -310,56 +334,106 @@ class RPSGameGUI:
             frame_left = self.draw_captured_frame(frame_left, self.player1.captured_frame, 
                                                   "top-left", self.player1.captured_gesture)
 
-        if results_p2['landmarks']:
-            self.player2.mp_drawing.draw_landmarks(
-                frame_right, results_p2['landmarks'], self.player2.mp_hands.HAND_CONNECTIONS,
-                self.player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-                self.player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
-            )
+        # Handle right side based on game mode
+        if self.game_mode == "two":
+            # Two-player mode: draw landmarks and captured frame for player 2
+            if results_p2['landmarks']:
+                self.player2.mp_drawing.draw_landmarks(
+                    frame_right, results_p2['landmarks'], self.player2.mp_hands.HAND_CONNECTIONS,
+                    self.player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                    self.player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
+                )
 
-        if self.player2.captured_frame is not None:
-            frame_right = self.draw_captured_frame(frame_right, self.player2.captured_frame, 
-                                                   "top-right", self.player2.captured_gesture)
+            if self.player2.captured_frame is not None:
+                frame_right = self.draw_captured_frame(frame_right, self.player2.captured_frame, 
+                                                       "top-right", self.player2.captured_gesture)
+        else:
+            # Single-player mode: show bot image on right side
+            if self.game_mode_state == "play":
+                # Show rule image during play mode
+                if 'rule' in self.bot_images and self.bot_images['rule'] is not None:
+                    bot_img = cv2.resize(self.bot_images['rule'], (frame_right.shape[1], frame_right.shape[0]))
+                    frame_right = bot_img
+            elif self.game_mode_state == "countdown":
+                # During countdown, check if we're at 1
+                elapsed = time.time() - self.countdown_start
+                remaining = self.countdown_duration - elapsed
+                if int(remaining) + 1 == 1 and self.bot_gesture:
+                    # Show bot gesture image at countdown = 1
+                    gesture_map = {"Búa": "rock", "Giấy": "paper", "Kéo": "scissors"}
+                    img_key = gesture_map.get(self.bot_gesture)
+                    if img_key and img_key in self.bot_images and self.bot_images[img_key] is not None:
+                        bot_img = cv2.resize(self.bot_images[img_key], (frame_right.shape[1], frame_right.shape[0]))
+                        frame_right = bot_img
+                else:
+                    # Show rule image before countdown reaches 1
+                    if 'rule' in self.bot_images and self.bot_images['rule'] is not None:
+                        bot_img = cv2.resize(self.bot_images['rule'], (frame_right.shape[1], frame_right.shape[0]))
+                        frame_right = bot_img
+            elif self.game_mode_state == "result" and self.bot_gesture:
+                # Show bot gesture during result
+                gesture_map = {"Búa": "rock", "Giấy": "paper", "Kéo": "scissors"}
+                img_key = gesture_map.get(self.bot_gesture)
+                if img_key and img_key in self.bot_images and self.bot_images[img_key] is not None:
+                    bot_img = cv2.resize(self.bot_images[img_key], (frame_right.shape[1], frame_right.shape[0]))
+                    frame_right = bot_img
 
         # Game logic
-        if self.game_mode == "play":
+        if self.game_mode_state == "play":
             gesture_p1 = results_p1['prediction'] if results_p1['prediction'] else "Không có tay"
-            gesture_p2 = results_p2['prediction'] if results_p2['prediction'] else "Không có tay"
 
             # Draw current prediction below last round box for player 1
             frame_left = self.draw_current_prediction(frame_left, gesture_p1, "top-left")
 
-            # Draw current prediction below last round box for player 2
-            frame_right = self.draw_current_prediction(frame_right, gesture_p2, "top-right")
+            if self.game_mode == "two":
+                gesture_p2 = results_p2['prediction'] if results_p2['prediction'] else "Không có tay"
+                # Draw current prediction below last round box for player 2
+                frame_right = self.draw_current_prediction(frame_right, gesture_p2, "top-right")
             
             self.game_window.update_status("Sẵn sàng! Nhấn SPACE để bắt đầu", "#00FF00")
 
-        elif self.game_mode == "countdown":
+        elif self.game_mode_state == "countdown":
             elapsed = time.time() - self.countdown_start
             remaining = self.countdown_duration - elapsed
 
             if remaining > 0:
                 countdown_text = str(int(remaining) + 1)
+                
+                # Check if countdown reached 1
+                if int(remaining) + 1 == 1:
+                    # Random AI gesture at countdown = 1
+                    if self.game_mode == "single" and self.bot_gesture is None:
+                        import random
+                        self.bot_gesture = random.choice(["Búa", "Giấy", "Kéo"])
+                        print(f"🤖 Bot chose: {self.bot_gesture}")
 
                 cv2.putText(frame_left, countdown_text, (mid_width//2 - 50, height//2),
                            cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
-                cv2.putText(frame_right, countdown_text, (mid_width//2 - 50, height//2),
-                           cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
+                
+                if self.game_mode == "two":
+                    cv2.putText(frame_right, countdown_text, (mid_width//2 - 50, height//2),
+                               cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
+                else:
+                    # Single player mode: show countdown on bot side too
+                    cv2.putText(frame_right, countdown_text, (mid_width//2 - 50, height//2),
+                               cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
                 
                 self.game_window.update_status(f"Chuẩn bị... {countdown_text}", "#00FFFF")
             else:
                 # Capture and process logic (same as original)
                 if not self.capture_state['done']:
                     self.capture_state['captured_frames']['left'] = clean_frame_left.copy()
-                    self.capture_state['captured_frames']['right'] = clean_frame_right.copy()
                     
                     with self.player1.lock:
                         self.player1.prediction_buffer.clear()
-                    with self.player2.lock:
-                        self.player2.prediction_buffer.clear()
                     
-                    self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode)
-                    self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode)
+                    self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode_state)
+                    
+                    if self.game_mode == "two":
+                        self.capture_state['captured_frames']['right'] = clean_frame_right.copy()
+                        with self.player2.lock:
+                            self.player2.prediction_buffer.clear()
+                        self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode_state)
                     
                     self.capture_state['capture_time'] = time.time()
                     self.capture_state['done'] = True
@@ -375,40 +449,61 @@ class RPSGameGUI:
                     
                     self.game_window.update_status("Đang xử lý...", "#00FFFF")
                     
-                    self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode)
-                    self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode)
+                    self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode_state)
+                    if self.game_mode == "two":
+                        self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode_state)
                 else:
                     if not self.capture_state['predictions_ready']:
                         results_p1 = self.player1.get_results()
-                        results_p2 = self.player2.get_results()
                         
                         pred_p1 = results_p1['prediction']
-                        pred_p2 = results_p2['prediction']
                         landmarks_p1 = results_p1['landmarks']
-                        landmarks_p2 = results_p2['landmarks']
                         
-                        if (pred_p1 is None or pred_p2 is None or 
-                            landmarks_p1 is None or landmarks_p2 is None):
-                            if processing_time < 2.0:
-                                if pred_p1 is None or landmarks_p1 is None:
+                        if self.game_mode == "two":
+                            results_p2 = self.player2.get_results()
+                            pred_p2 = results_p2['prediction']
+                            landmarks_p2 = results_p2['landmarks']
+                        else:
+                            # Single player mode: use bot gesture
+                            pred_p2 = self.bot_gesture
+                            landmarks_p2 = "bot"  # Dummy value for bot
+                        
+                        # Check if predictions are ready
+                        if self.game_mode == "two":
+                            if (pred_p1 is None or pred_p2 is None or 
+                                landmarks_p1 is None or landmarks_p2 is None):
+                                if processing_time < 2.0:
+                                    if pred_p1 is None or landmarks_p1 is None:
+                                        cv2.putText(frame_left, "DETECTING...", (50, height//2),
+                                                   cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 4)
+                                    if pred_p2 is None or landmarks_p2 is None:
+                                        cv2.putText(frame_right, "DETECTING...", (50, height//2),
+                                                   cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 4)
+                                    
+                                    self.game_window.update_status("Đang phát hiện...", "#FFA500")
+                                    
+                                    self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode_state)
+                                    self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode_state)
+                                    return
+                                else:
+                                    pred_p1 = pred_p1 if pred_p1 else None
+                                    pred_p2 = pred_p2 if pred_p2 else None
+                        else:
+                            # Single player mode: only check player 1
+                            if pred_p1 is None or landmarks_p1 is None:
+                                if processing_time < 2.0:
                                     cv2.putText(frame_left, "DETECTING...", (50, height//2),
                                                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 4)
-                                if pred_p2 is None or landmarks_p2 is None:
-                                    cv2.putText(frame_right, "DETECTING...", (50, height//2),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 4)
-                                
-                                self.game_window.update_status("Đang phát hiện...", "#FFA500")
-                                
-                                self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode)
-                                self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode)
-                                return
-                            else:
-                                pred_p1 = pred_p1 if pred_p1 else None
-                                pred_p2 = pred_p2 if pred_p2 else None
+                                    
+                                    self.game_window.update_status("Đang phát hiện...", "#FFA500")
+                                    
+                                    self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode_state)
+                                    return
+                                else:
+                                    pred_p1 = pred_p1 if pred_p1 else None
                         
                         # Store results
                         captured_with_landmarks_left = self.capture_state['captured_frames']['left'].copy()
-                        captured_with_landmarks_right = self.capture_state['captured_frames']['right'].copy()
                         
                         if landmarks_p1:
                             self.player1.mp_drawing.draw_landmarks(
@@ -416,19 +511,24 @@ class RPSGameGUI:
                                 self.player1.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
                                 self.player1.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
                             )
-                        if landmarks_p2:
-                            self.player2.mp_drawing.draw_landmarks(
-                                captured_with_landmarks_right, landmarks_p2, self.player2.mp_hands.HAND_CONNECTIONS,
-                                self.player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-                                self.player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
-                            )
                         
                         self.player1.captured_frame = self.capture_state['captured_frames']['left']
-                        self.player2.captured_frame = self.capture_state['captured_frames']['right']
                         self.player1.captured_frame_with_landmarks = captured_with_landmarks_left
-                        self.player2.captured_frame_with_landmarks = captured_with_landmarks_right
                         self.player1.captured_gesture = pred_p1 if pred_p1 else "Không có tay"
-                        self.player2.captured_gesture = pred_p2 if pred_p2 else "Không có tay"
+                        
+                        if self.game_mode == "two":
+                            captured_with_landmarks_right = self.capture_state['captured_frames']['right'].copy()
+                            
+                            if landmarks_p2:
+                                self.player2.mp_drawing.draw_landmarks(
+                                    captured_with_landmarks_right, landmarks_p2, self.player2.mp_hands.HAND_CONNECTIONS,
+                                    self.player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                                    self.player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
+                                )
+                            
+                            self.player2.captured_frame = self.capture_state['captured_frames']['right']
+                            self.player2.captured_frame_with_landmarks = captured_with_landmarks_right
+                            self.player2.captured_gesture = pred_p2 if pred_p2 else "Không có tay"
 
                         self.player1_final = pred_p1
                         self.player2_final = pred_p2
@@ -450,7 +550,7 @@ class RPSGameGUI:
                             self.result = "Không phát hiện tay!"
 
                         self.result_time = time.time()
-                        self.game_mode = "result"
+                        self.game_mode_state = "result"
                         
                         # Update GUI scores
                         self.game_window.update_scores(self.player1_score, self.player2_score, self.draws)
@@ -458,15 +558,20 @@ class RPSGameGUI:
                         # Reset capture state for next round
                         self.capture_state['done'] = False
                         self.capture_state['predictions_ready'] = False
+                        
+                        # Reset bot gesture for next round
+                        if self.game_mode == "single":
+                            self.bot_gesture = None
 
-        elif self.game_mode == "result":
+        elif self.game_mode_state == "result":
             # Draw current prediction below last round box for player 1
             gesture_text_p1 = self.player1_final if self.player1_final else "Không có tay"
             frame_left = self.draw_current_prediction(frame_left, gesture_text_p1, "top-left")
 
-            # Draw current prediction below last round box for player 2
-            gesture_text_p2 = self.player2_final if self.player2_final else "Không có tay"
-            frame_right = self.draw_current_prediction(frame_right, gesture_text_p2, "top-right")
+            if self.game_mode == "two":
+                # Draw current prediction below last round box for player 2
+                gesture_text_p2 = self.player2_final if self.player2_final else "Không có tay"
+                frame_right = self.draw_current_prediction(frame_right, gesture_text_p2, "top-right")
             
             # Determine result color
             if self.app_manager.player1_name in self.result:
@@ -479,7 +584,7 @@ class RPSGameGUI:
             self.game_window.update_status(self.result, result_color)
 
             if time.time() - self.result_time > 3:
-                self.game_mode = "play"
+                self.game_mode_state = "play"
                 self.player1_final = None
                 self.player2_final = None
                 self.result = ""
@@ -700,8 +805,8 @@ class RPSGameGUI:
         if key == Qt.Key_Q:
             self.cleanup()
             QApplication.quit()
-        elif key == Qt.Key_Space and self.game_mode == "play":
-            self.game_mode = "countdown"
+        elif key == Qt.Key_Space and self.game_mode_state == "play":
+            self.game_mode_state = "countdown"
             self.countdown_start = time.time()
             self.result = ""
             # Play countdown sound and fade background music
@@ -709,9 +814,9 @@ class RPSGameGUI:
         elif key == Qt.Key_R:
             # Reset scores only
             self.reset_scores()
-        elif key == Qt.Key_N:
-            # Restart game with new names
-            self.restart_game()
+        elif key == Qt.Key_Escape:
+            # Return to main menu (mode selection)
+            self.return_to_menu()
         elif key == Qt.Key_F11:
             # Toggle fullscreen
             if self.game_window.isFullScreen():
@@ -721,7 +826,7 @@ class RPSGameGUI:
 
     def reset_scores(self):
         """Reset scores only"""
-        self.game_mode = "play"
+        self.game_mode_state = "play"
         self.player1_final = None
         self.player2_final = None
         self.result = ""
@@ -733,8 +838,8 @@ class RPSGameGUI:
             self.game_window.update_scores(0, 0, 0)
             self.game_window.update_status("Điểm đã được reset!", "#FFD700")
     
-    def restart_game(self):
-        """Restart game with new names"""
+    def return_to_menu(self):
+        """Return to main menu (mode selection)"""
         # Stop current game
         self.timer.stop()
         
@@ -745,8 +850,18 @@ class RPSGameGUI:
         # Reset scores
         self.reset_scores()
         
-        # Show name dialog to re-enter names
-        self.app_manager.show_name_dialog_for_restart(self)
+        # Clean up players
+        if self.player1:
+            self.player1.stop()
+        if self.player2 and self.game_mode == "two":
+            self.player2.stop()
+        
+        # Release camera
+        if self.cap:
+            self.cap.release()
+        
+        # Show mode selection dialog
+        self.app_manager.show_mode_dialog()
 
     def cleanup(self):
         """Cleanup resources"""
@@ -759,7 +874,7 @@ class RPSGameGUI:
         # Stop players
         if self.player1:
             self.player1.stop()
-        if self.player2:
+        if self.player2 and self.game_mode == "two":
             self.player2.stop()
         
         # Release camera

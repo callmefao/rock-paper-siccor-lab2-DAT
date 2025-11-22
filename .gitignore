@@ -4,3 +4,6 @@
 __pycache__/
 
 .venv/
+
+asset/result/player-1.mp3
+asset/result/player-2.mp3
