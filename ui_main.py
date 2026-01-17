@@ -33,14 +33,6 @@ class AudioManager:
         self.fade_timer = None
         self.fade_duration = 10.0  # Fade duration in seconds
         self.sound_cache = {}  # Cache để lưu pygame.mixer.Sound objects
-    
-    def __del__(self):
-        """Destructor to ensure cleanup when object is destroyed"""
-        try:
-            self.stop_all()
-        except Exception as e:
-            # Silently handle errors during cleanup
-            pass
         
     def start_background_music(self):
         """Start playing background music in loop"""
@@ -123,24 +115,183 @@ class AudioManager:
             print(f"⚠ Warning: Could not fade up music: {e}")
     
     def stop_all(self):
-        """Stop all audio and cleanup resources"""
+        """Stop all audio"""
         try:
-            # Cancel fade timer if exists
             if self.fade_timer:
                 self.fade_timer.cancel()
-                self.fade_timer = None
-            
-            # Stop background music
-            if self.bg_music_playing:
-                pygame.mixer.music.stop()
-                self.bg_music_playing = False
-            
-            # Clear sound cache to free memory
-            self.sound_cache.clear()
-            
-            print("🔇 All audio stopped and resources cleaned up")
+            pygame.mixer.music.stop()
+            self.bg_music_playing = False
+            print("🔇 All audio stopped")
         except Exception as e:
             print(f"⚠ Warning: Could not stop audio: {e}")
+
+
+# =====================================
+# Game Mode Selection Screen
+# =====================================
+class GameModeDialog(QWidget):
+    """Dialog for selecting game mode"""
+    mode_selected = pyqtSignal(str)  # Signal to emit game mode: "ai" or "pvp"
+    
+    def __init__(self):
+        super().__init__()
+        self.init_ui()
+        
+    def init_ui(self):
+        """Initialize the UI"""
+        self.setWindowTitle("Oẳn Tù Tì - Chọn Chế Độ Chơi")
+        
+        # Set gradient background
+        self.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #667eea, stop:1 #764ba2);
+            }
+        """)
+        
+        # Main layout
+        main_layout = QVBoxLayout()
+        main_layout.setAlignment(Qt.AlignCenter)
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Center container
+        center_container = QWidget()
+        center_container.setFixedWidth(800)
+        center_container.setStyleSheet("""
+            QWidget {
+                background: white;
+                border-radius: 25px;
+            }
+        """)
+        
+        # Content layout
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(30)
+        content_layout.setContentsMargins(60, 60, 60, 60)
+        
+        # FPT logo at top
+        fpt_container = QHBoxLayout()
+        fpt_container.setAlignment(Qt.AlignCenter)
+        
+        fpt_logo = QLabel()
+        fpt_pixmap = QPixmap("asset/LogoFPT.png")
+        if not fpt_pixmap.isNull():
+            fpt_logo.setPixmap(fpt_pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        fpt_container.addWidget(fpt_logo)
+        content_layout.addLayout(fpt_container)
+        
+        # Game icon
+        icon_container = QHBoxLayout()
+        icon_container.setAlignment(Qt.AlignCenter)
+        
+        icon_label = QLabel()
+        icon_pixmap = QPixmap("asset/icons/rock-paper-scissors.png")
+        if not icon_pixmap.isNull():
+            icon_label.setPixmap(icon_pixmap.scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        icon_container.addWidget(icon_label)
+        content_layout.addLayout(icon_container)
+        
+        # Title
+        title = QLabel("OẲN TÙ TÌ")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("""
+            font-size: 56px;
+            font-weight: bold;
+            color: #2d3436;
+            margin: 10px 0px;
+        """)
+        content_layout.addWidget(title)
+        
+        # Subtitle
+        subtitle = QLabel("Chọn chế độ chơi để bắt đầu")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setStyleSheet("""
+            font-size: 22px;
+            color: #636e72;
+            margin-bottom: 20px;
+        """)
+        content_layout.addWidget(subtitle)
+        
+        # AI Mode button
+        self.ai_button = QPushButton("🤖 CHƠI VỚI AI")
+        self.ai_button.setStyleSheet("""
+            QPushButton {
+                padding: 25px;
+                font-size: 28px;
+                font-weight: bold;
+                color: white;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00b894, stop:1 #00cec9);
+                border: none;
+                border-radius: 15px;
+                margin: 10px 0px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00a085, stop:1 #00b5b0);
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #008c75, stop:1 #009c98);
+            }
+        """)
+        self.ai_button.clicked.connect(lambda: self.select_mode("ai"))
+        content_layout.addWidget(self.ai_button)
+        
+        # Description for AI mode
+        ai_desc = QLabel("(1 người chơi - Thử thách phản xạ của bạn)")
+        ai_desc.setAlignment(Qt.AlignCenter)
+        ai_desc.setStyleSheet("""
+            font-size: 16px;
+            color: #636e72;
+            margin-bottom: 15px;
+        """)
+        content_layout.addWidget(ai_desc)
+        
+        # PvP Mode button
+        self.pvp_button = QPushButton("👥 HAI NGƯỜI CHƠI")
+        self.pvp_button.setStyleSheet("""
+            QPushButton {
+                padding: 25px;
+                font-size: 28px;
+                font-weight: bold;
+                color: white;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #fd79a8, stop:1 #fdcb6e);
+                border: none;
+                border-radius: 15px;
+                margin: 10px 0px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #e66a99, stop:1 #e4b75f);
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #ce5a89, stop:1 #caa350);
+            }
+        """)
+        self.pvp_button.clicked.connect(lambda: self.select_mode("pvp"))
+        content_layout.addWidget(self.pvp_button)
+        
+        # Description for PvP mode
+        pvp_desc = QLabel("(2 người chơi - Đối đầu trực tiếp)")
+        pvp_desc.setAlignment(Qt.AlignCenter)
+        pvp_desc.setStyleSheet("""
+            font-size: 16px;
+            color: #636e72;
+        """)
+        content_layout.addWidget(pvp_desc)
+        
+        center_container.setLayout(content_layout)
+        main_layout.addWidget(center_container)
+        self.setLayout(main_layout)
+        
+    def select_mode(self, mode):
+        """Handle mode selection"""
+        self.mode_selected.emit(mode)
+        self.close()
 
 
 # =====================================
@@ -150,8 +301,9 @@ class PlayerNameDialog(QWidget):
     """Dialog for entering player names"""
     names_submitted = pyqtSignal(str, str)  # Signal to emit player names
     
-    def __init__(self):
+    def __init__(self, game_mode="pvp"):
         super().__init__()
+        self.game_mode = game_mode
         self.init_ui()
         
     def init_ui(self):
@@ -220,8 +372,9 @@ class PlayerNameDialog(QWidget):
         """)
         content_layout.addWidget(title)
         
-        # Subtitle
-        subtitle = QLabel("Nhập tên người chơi để bắt đầu")
+        # Subtitle - dynamic based on game mode
+        subtitle_text = "Nhập tên của bạn để bắt đầu" if self.game_mode == "ai" else "Nhập tên người chơi để bắt đầu"
+        subtitle = QLabel(subtitle_text)
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setStyleSheet("""
             font-size: 18px;
@@ -231,7 +384,7 @@ class PlayerNameDialog(QWidget):
         content_layout.addWidget(subtitle)
         
         # Player 1
-        p1_label = QLabel("👤 Người Chơi 1:")
+        p1_label = QLabel("👤 Người Chơi:" if self.game_mode == "ai" else "👤 Người Chơi 1:")
         p1_label.setStyleSheet("""
             font-size: 20px;
             font-weight: bold;
@@ -241,7 +394,7 @@ class PlayerNameDialog(QWidget):
         content_layout.addWidget(p1_label)
         
         self.player1_input = QLineEdit()
-        self.player1_input.setPlaceholderText("Nhập tên Người Chơi 1...")
+        self.player1_input.setPlaceholderText("Nhập tên của bạn..." if self.game_mode == "ai" else "Nhập tên Người Chơi 1...")
         self.player1_input.setStyleSheet("""
             QLineEdit {
                 padding: 15px 20px;
@@ -258,33 +411,38 @@ class PlayerNameDialog(QWidget):
         """)
         content_layout.addWidget(self.player1_input)
         
-        # Player 2
-        p2_label = QLabel("👤 Người Chơi 2:")
-        p2_label.setStyleSheet("""
-            font-size: 20px;
-            font-weight: bold;
-            color: #fd79a8;
-            margin-top: 15px;
-        """)
-        content_layout.addWidget(p2_label)
-        
-        self.player2_input = QLineEdit()
-        self.player2_input.setPlaceholderText("Nhập tên Người Chơi 2...")
-        self.player2_input.setStyleSheet("""
-            QLineEdit {
-                padding: 15px 20px;
-                font-size: 18px;
-                border: 2px solid #fd79a8;
-                border-radius: 10px;
-                background: #f8f9fa;
-                color: #2d3436;
-            }
-            QLineEdit:focus {
-                border: 2px solid #fab1a0;
-                background: white;
-            }
-        """)
-        content_layout.addWidget(self.player2_input)
+        # Player 2 - only for PvP mode
+        if self.game_mode == "pvp":
+            p2_label = QLabel("👤 Người Chơi 2:")
+            p2_label.setStyleSheet("""
+                font-size: 20px;
+                font-weight: bold;
+                color: #fd79a8;
+                margin-top: 15px;
+            """)
+            content_layout.addWidget(p2_label)
+            
+            self.player2_input = QLineEdit()
+            self.player2_input.setPlaceholderText("Nhập tên Người Chơi 2...")
+            self.player2_input.setStyleSheet("""
+                QLineEdit {
+                    padding: 15px 20px;
+                    font-size: 18px;
+                    border: 2px solid #fd79a8;
+                    border-radius: 10px;
+                    background: #f8f9fa;
+                    color: #2d3436;
+                }
+                QLineEdit:focus {
+                    border: 2px solid #fab1a0;
+                    background: white;
+                }
+            """)
+            content_layout.addWidget(self.player2_input)
+            self.player2_input.returnPressed.connect(self.submit_names)
+        else:
+            # For AI mode, create hidden player2_input
+            self.player2_input = None
         
         # Start button
         self.start_button = QPushButton("🚀 BẮT ĐẦU")
@@ -318,18 +476,23 @@ class PlayerNameDialog(QWidget):
         
         # Connect Enter key to submit
         self.player1_input.returnPressed.connect(self.submit_names)
-        self.player2_input.returnPressed.connect(self.submit_names)
         
     def submit_names(self):
         """Submit player names"""
         player1_name = self.player1_input.text().strip()
-        player2_name = self.player2_input.text().strip()
         
         # Use default names if empty
         if not player1_name:
             player1_name = "Player 1"
-        if not player2_name:
-            player2_name = "Player 2"
+        
+        if self.game_mode == "ai":
+            # AI mode - player 2 is always "AI"
+            player2_name = "AI"
+        else:
+            # PvP mode - get player 2 name
+            player2_name = self.player2_input.text().strip() if self.player2_input else ""
+            if not player2_name:
+                player2_name = "Player 2"
             
         self.names_submitted.emit(player1_name, player2_name)
         self.close()
@@ -342,10 +505,11 @@ class LoadingScreen(QWidget):
     """Loading screen with animation"""
     loading_complete = pyqtSignal()
     
-    def __init__(self, player1_name, player2_name):
+    def __init__(self, player1_name, player2_name, game_mode="pvp"):
         super().__init__()
         self.player1_name = player1_name
         self.player2_name = player2_name
+        self.game_mode = game_mode
         self.dots = 0
         self.init_ui()
         
@@ -486,8 +650,12 @@ class LoadingScreen(QWidget):
             tts_p1 = gTTS(text=text_p1, lang='vi', slow=False)
             tts_p1.save("asset/result/player-1.mp3")
             
-            # Generate audio for Player 2 (ghi đè file cũ)
-            text_p2 = f"Chúc mừng người chơi {self.player2_name} chiến thắng"
+            # Generate audio for Player 2 only if not AI mode (ghi đè file cũ)
+            if self.game_mode == "ai":
+                # For AI mode, use a generic message
+                text_p2 = "AI chiến thắng"
+            else:
+                text_p2 = f"Chúc mừng người chơi {self.player2_name} chiến thắng"
             tts_p2 = gTTS(text=text_p2, lang='vi', slow=False)
             tts_p2.save("asset/result/player-2.mp3")
             
@@ -680,7 +848,7 @@ class GameWindow(QMainWindow):
         layout.setSpacing(20)
         
         # Instructions
-        instructions = QLabel("⌨️ SPACE: Bắt đầu  |  R: Reset điểm  |  N: Đổi tên  |  Q: Thoát")
+        instructions = QLabel("⌨️ SPACE: Bắt đầu  |  R: Reset điểm  |  ESC: Menu chính  |  Q: Thoát")
         instructions.setStyleSheet("""
             QLabel {
                 color: #FFFFFF;
@@ -716,9 +884,9 @@ class GameWindow(QMainWindow):
             # Convert to QImage
             qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
             
-            # Scale to fit label while maintaining aspect ratio
+            # Scale to FILL label (stretch to remove black bars)
             pixmap = QPixmap.fromImage(qt_image)
-            scaled_pixmap = pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            scaled_pixmap = pixmap.scaled(self.video_label.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
             
             self.video_label.setPixmap(scaled_pixmap)
         except Exception as e:
@@ -772,6 +940,7 @@ class RPSApplication:
         self.app = QApplication(sys.argv)
         self.player1_name = "Player 1"
         self.player2_name = "Player 2"
+        self.game_mode = "pvp"  # Default to PvP
         self.game_window = None
         self.audio_manager = AudioManager()
         
@@ -780,19 +949,48 @@ class RPSApplication:
         # Start background music
         self.audio_manager.start_background_music()
         
+        # Show game mode selection dialog first
+        self.show_game_mode_dialog()
+    
+    def show_game_mode_dialog(self):
+        """Show game mode selection dialog"""
+        self.mode_dialog = GameModeDialog()
+        self.mode_dialog.mode_selected.connect(self.on_mode_selected)
+        self.mode_dialog.showFullScreen()
+    
+    def on_mode_selected(self, mode):
+        """Handle mode selection"""
+        self.game_mode = mode
+        print(f"🎮 Game mode selected: {mode}")
+        
         # Show name input dialog
         self.show_name_dialog()
         
     def show_name_dialog(self):
         """Show player name input dialog"""
-        self.name_dialog = PlayerNameDialog()
+        self.name_dialog = PlayerNameDialog(self.game_mode)
         self.name_dialog.names_submitted.connect(self.on_names_submitted)
         self.name_dialog.showFullScreen()
     
     def show_name_dialog_for_restart(self, game_instance):
-        """Show player name input dialog for restart"""
+        """Show player name input dialog for restart - return to mode selection"""
         self.game_instance = game_instance
-        self.name_dialog = PlayerNameDialog()
+        # Show mode selection dialog again
+        self.show_game_mode_dialog_for_restart()
+    
+    def show_game_mode_dialog_for_restart(self):
+        """Show game mode selection dialog for restart"""
+        self.mode_dialog = GameModeDialog()
+        self.mode_dialog.mode_selected.connect(self.on_mode_selected_restart)
+        self.mode_dialog.showFullScreen()
+    
+    def on_mode_selected_restart(self, mode):
+        """Handle mode selection for restart"""
+        self.game_mode = mode
+        print(f"🎮 Game mode selected (restart): {mode}")
+        
+        # Show name dialog
+        self.name_dialog = PlayerNameDialog(self.game_mode)
         self.name_dialog.names_submitted.connect(self.on_names_submitted_restart)
         self.name_dialog.showFullScreen()
         
@@ -810,7 +1008,7 @@ class RPSApplication:
         self.player2_name = player2_name
         
         # Show loading screen for restart
-        self.loading_screen = LoadingScreen(self.player1_name, self.player2_name)
+        self.loading_screen = LoadingScreen(self.player1_name, self.player2_name, self.game_mode)
         self.loading_screen.loading_complete.connect(self.on_restart_loading_complete)
         self.loading_screen.showFullScreen()
     
@@ -819,10 +1017,11 @@ class RPSApplication:
         # Clear sound cache để load file âm thanh mới
         self.audio_manager.clear_sound_cache()
         
-        # Update player names in game instance
+        # Update player names and game mode in game instance
         if hasattr(self, 'game_instance'):
             self.game_instance.player1.name = self.player1_name
             self.game_instance.player2.name = self.player2_name
+            self.game_instance.game_mode_type = self.game_mode
             
             # Update game window with new names
             self.game_instance.game_window.player1_name = self.player1_name
@@ -836,11 +1035,11 @@ class RPSApplication:
             # Restart timer
             self.game_instance.timer.start(self.game_instance.timer_interval)
             
-            self.game_instance.game_window.update_status("Đã cập nhật tên người chơi!", "#00FF00")
+            self.game_instance.game_window.update_status("Đã cập nhật chế độ chơi!", "#00FF00")
         
     def show_loading_screen(self):
         """Show loading screen"""
-        self.loading_screen = LoadingScreen(self.player1_name, self.player2_name)
+        self.loading_screen = LoadingScreen(self.player1_name, self.player2_name, self.game_mode)
         self.loading_screen.loading_complete.connect(self.on_loading_complete)
         self.loading_screen.showFullScreen()
         

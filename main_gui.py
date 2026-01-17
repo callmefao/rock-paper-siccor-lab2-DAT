@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import sys
 import time
+import random
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication
 from joblib import load
@@ -16,7 +17,7 @@ from ui_main import RPSApplication, GameWindow
 
 # Import game components
 from hand_feature_extractor import HandFeatureExtractor
-from main import Player, normalize_hand_orientation, determine_winner, play_sound
+from main import Player, determine_winner, play_sound
 
 
 # =====================================
@@ -39,6 +40,7 @@ class RPSGameGUI:
         """
         self.app_manager = app_manager
         self.audio_manager = app_manager.audio_manager  # Store audio manager reference
+        self.game_mode_type = app_manager.game_mode  # "ai" or "pvp"
         
         # Load trained model and scaler
         self.model = load(model_path)
@@ -48,6 +50,11 @@ class RPSGameGUI:
         self.camera_width = camera_width
         self.camera_height = camera_height
         self.countdown_duration = countdown_duration
+        
+        # FPS tracking
+        self.fps_counter = 0
+        self.fps_start_time = time.time()
+        self.current_fps = 0
 
         # Load Vietnamese-compatible font
         self.font_cache = {}
@@ -81,6 +88,29 @@ class RPSGameGUI:
                     print(f"⚠ Warning: Could not load icon from {path}")
             except Exception as e:
                 print(f"⚠ Warning: Error loading icon {path}: {e}")
+        
+        # Load bot-play assets for AI mode
+        self.bot_images = {}
+        bot_paths = {
+            "rule": "asset/bot-play/rule.jpg",
+            "rock": "asset/bot-play/rock.jpg",
+            "paper": "asset/bot-play/paper.jpg",
+            "scissors": "asset/bot-play/sisscors.jpg"
+        }
+        for key, path in bot_paths.items():
+            try:
+                img = cv2.imread(path)
+                if img is not None:
+                    self.bot_images[key] = img
+                    print(f"✓ Loaded bot image: {key}")
+                else:
+                    print(f"⚠ Warning: Could not load bot image from {path}")
+            except Exception as e:
+                print(f"⚠ Warning: Error loading bot image {path}: {e}")
+        
+        # AI player state
+        self.ai_gesture = None
+        self.ai_gesture_time = None
             
         # GUI window
         self.game_window = None
@@ -100,14 +130,6 @@ class RPSGameGUI:
         self.result = ""
         self.result_time = None
         
-        # Capture state (thread-safe)
-        self.capture_state = {
-            'done': False,
-            'predictions_ready': False,
-            'capture_time': None,
-            'captured_frames': {'left': None, 'right': None}
-        }
-        
         # Score tracking
         self.player1_score = 0
         self.player2_score = 0
@@ -118,6 +140,7 @@ class RPSGameGUI:
         self.timer.timeout.connect(self.update_frame)
         self.target_fps = 30
         self.timer_interval = int(1000 / self.target_fps)  # milliseconds
+        print(f"⏱️  Timer configured: {self.timer_interval}ms interval (target: {self.target_fps} FPS)")
     
     def load_vietnamese_font(self):
         """Load Vietnamese-compatible fonts"""
@@ -159,9 +182,9 @@ class RPSGameGUI:
         """Draw current prediction text below the last round box with background box and icon"""
         h, w = frame.shape[:2]
         margin = 10
-        viz_size = 280  # Matches the captured frame box size
+        viz_size = 100  # Reduced to 50% of original (200 -> 100)
         box_width = viz_size
-        box_height = 70
+        box_height = 30  # Reduced to 50% (60 -> 30)
         
         # Calculate position below the last round box
         if position == "top-left":
@@ -184,13 +207,13 @@ class RPSGameGUI:
                      (0, 255, 0), 2)
         
         # Draw icon if gesture has an icon
-        icon_size = 50
+        icon_size = 20  # Reduced to 50% (40 -> 20)
         if gesture in self.gesture_icons:
             icon = self.gesture_icons[gesture]
             icon_resized = cv2.resize(icon, (icon_size, icon_size))
             
-            icon_x = x_offset + 10
-            icon_y = y_offset + 10
+            icon_x = x_offset + 5
+            icon_y = y_offset + (box_height - icon_size) // 2  # Center vertically
             
             # Handle transparency for icon overlay
             if icon_resized.shape[2] == 4:  # Has alpha channel
@@ -209,27 +232,25 @@ class RPSGameGUI:
         draw = ImageDraw.Draw(pil_img)
         
         try:
-            font_label = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 16)
-            font_gesture = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 22)  # Slightly smaller
+            font_label = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 10)
+            font_gesture = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 14)
         except:
             try:
-                font_label = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 16)
-                font_gesture = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 22)
+                font_label = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 13)
+                font_gesture = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 18)
             except:
                 font_label = ImageFont.load_default()
                 font_gesture = ImageFont.load_default()
         
-        # Calculate centered text position for label
-        label_bbox = draw.textbbox((0, 0), "Hiện tại:", font=font_label)
-        label_width = label_bbox[2] - label_bbox[0]
-        label_x = x_offset + (box_width - label_width) // 2
+        # Draw gesture text next to icon, centered vertically
+        text_x = x_offset + icon_size + 8 if gesture in self.gesture_icons else x_offset + 5
         
-        # Draw centered label with dark text for white background
-        draw.text((label_x, y_offset + 8), "Hiện tại:", font=font_label, fill=(0, 0, 0))
+        # Calculate vertical center for text
+        gesture_bbox = draw.textbbox((0, 0), gesture, font=font_gesture)
+        text_height = gesture_bbox[3] - gesture_bbox[1]
+        text_y = y_offset + (box_height - text_height) // 2
         
-        # Draw gesture text next to icon
-        text_x = x_offset + icon_size + 20 if gesture in self.gesture_icons else x_offset + 8
-        draw.text((text_x, y_offset + 32), gesture, font=font_gesture, fill=(0, 150, 0))
+        draw.text((text_x, text_y), gesture, font=font_gesture, fill=(0, 150, 0))
         
         # Convert back to OpenCV
         return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
@@ -243,14 +264,22 @@ class RPSGameGUI:
         self.game_window.showFullScreen()
         
         # Initialize camera with optimized settings
+        # STEP 1: Open camera with DirectShow + MJPEG codec
         self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # MJPEG for stable FPS
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
         self.cap.set(cv2.CAP_PROP_FPS, 30)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        # STEP 2: Lock auto exposure to prevent driver from adjusting when FPS drops
         self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+        self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)  # 0.75 = manual mode (lock exposure)
         self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+        
+        # STEP 3: Clear buffer by reading a few frames to flush stale data
+        for _ in range(5):
+            self.cap.read()
         
         print(f"📷 Camera initialized: {self.camera_width}x{self.camera_height} @ {self.target_fps}FPS")
         
@@ -273,12 +302,26 @@ class RPSGameGUI:
 
     def update_frame(self):
         """Update one frame - called by QTimer"""
+        frame_start = time.time()
+        
         ret, frame = self.cap.read()
         if not ret:
             print("⚠️ Failed to read frame from camera")
             return
+        read_time = time.time() - frame_start
 
         frame = cv2.flip(frame, 1)
+        
+        # Calculate FPS properly
+        self.fps_counter += 1
+        elapsed = time.time() - self.fps_start_time
+        if elapsed >= 1.0:
+            self.current_fps = self.fps_counter / elapsed
+            self.fps_counter = 0
+            self.fps_start_time = time.time()
+            # Debug timing every second
+            print(f"🔍 FPS: {self.current_fps:.1f} | Read: {read_time*1000:.1f}ms")
+        
         height, width = frame.shape[:2]
         mid_width = width // 2
 
@@ -286,19 +329,43 @@ class RPSGameGUI:
         frame_left = frame[:, :mid_width]
         frame_right = frame[:, mid_width:]
         
-        # Store CLEAN frames for potential capture
+        # Store CLEAN frames for potential capture BEFORE any modification
         clean_frame_left = frame_left.copy()
-        clean_frame_right = frame_right.copy()
+        clean_frame_right = frame_right.copy()  # Always save clean camera frame
 
+        # AI MODE: Show bot image on right side (AFTER saving clean frame)
+        if self.game_mode_type == "ai":
+            # Determine which bot image to show
+            if self.game_mode == "play" or (self.game_mode == "countdown" and self.ai_gesture is None):
+                # Show rule image
+                bot_img = self.bot_images.get("rule")
+            elif self.ai_gesture:
+                # Show AI's choice
+                gesture_map = {"Búa": "rock", "Giấy": "paper", "Kéo": "scissors"}
+                img_key = gesture_map.get(self.ai_gesture, "rule")
+                bot_img = self.bot_images.get(img_key)
+            else:
+                bot_img = self.bot_images.get("rule")
+            
+            if bot_img is not None:
+                # Resize bot image to fit frame_right (only for display)
+                bot_img_resized = cv2.resize(bot_img, (frame_right.shape[1], frame_right.shape[0]))
+                frame_right = bot_img_resized.copy()
+                # Note: clean_frame_right still contains camera frame for capture
+        
         # Update frames for each player
         self.player1.update_frame(frame_left, self.game_mode)
-        self.player2.update_frame(frame_right, self.game_mode)
+        # Always update player2 with camera frame (even in AI mode to keep thread alive)
+        # In AI mode, we just won't use player2's prediction
+        self.player2.update_frame(clean_frame_right, self.game_mode)
 
-        # Get results from both players
+        # Get results from both players (always, to keep tracking active)
         results_p1 = self.player1.get_results()
         results_p2 = self.player2.get_results()
+        
+        # In AI mode, we'll ignore player2's results but keep the thread running
 
-        # Draw hand landmarks
+        # Draw hand landmarks for player 1
         if results_p1['landmarks']:
             self.player1.mp_drawing.draw_landmarks(
                 frame_left, results_p1['landmarks'], self.player1.mp_hands.HAND_CONNECTIONS,
@@ -310,27 +377,30 @@ class RPSGameGUI:
             frame_left = self.draw_captured_frame(frame_left, self.player1.captured_frame, 
                                                   "top-left", self.player1.captured_gesture)
 
-        if results_p2['landmarks']:
-            self.player2.mp_drawing.draw_landmarks(
-                frame_right, results_p2['landmarks'], self.player2.mp_hands.HAND_CONNECTIONS,
-                self.player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-                self.player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
-            )
+        # Draw hand landmarks for player 2 (PvP only)
+        if self.game_mode_type == "pvp":
+            if results_p2['landmarks']:
+                self.player2.mp_drawing.draw_landmarks(
+                    frame_right, results_p2['landmarks'], self.player2.mp_hands.HAND_CONNECTIONS,
+                    self.player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                    self.player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
+                )
 
-        if self.player2.captured_frame is not None:
-            frame_right = self.draw_captured_frame(frame_right, self.player2.captured_frame, 
-                                                   "top-right", self.player2.captured_gesture)
+            if self.player2.captured_frame is not None:
+                frame_right = self.draw_captured_frame(frame_right, self.player2.captured_frame, 
+                                                       "top-right", self.player2.captured_gesture)
 
         # Game logic
         if self.game_mode == "play":
             gesture_p1 = results_p1['prediction'] if results_p1['prediction'] else "Không có tay"
-            gesture_p2 = results_p2['prediction'] if results_p2['prediction'] else "Không có tay"
 
             # Draw current prediction below last round box for player 1
             frame_left = self.draw_current_prediction(frame_left, gesture_p1, "top-left")
 
-            # Draw current prediction below last round box for player 2
-            frame_right = self.draw_current_prediction(frame_right, gesture_p2, "top-right")
+            # Draw current prediction below last round box for player 2 (PvP only)
+            if self.game_mode_type == "pvp":
+                gesture_p2 = results_p2['prediction'] if results_p2['prediction'] else "Không có tay"
+                frame_right = self.draw_current_prediction(frame_right, gesture_p2, "top-right")
             
             self.game_window.update_status("Sẵn sàng! Nhấn SPACE để bắt đầu", "#00FF00")
 
@@ -338,126 +408,140 @@ class RPSGameGUI:
             elapsed = time.time() - self.countdown_start
             remaining = self.countdown_duration - elapsed
 
+            # CAPTURE frame ONCE when countdown hits 0 (before processing)
+            if remaining <= 0 and not hasattr(self, '_frames_captured'):
+                self._captured_frame_left = clean_frame_left.copy()
+                self._captured_frame_right = clean_frame_right.copy()
+                self._frames_captured = True
+                print("📸 Frames captured at countdown=0")
+
             if remaining > 0:
                 countdown_text = str(int(remaining) + 1)
 
                 cv2.putText(frame_left, countdown_text, (mid_width//2 - 50, height//2),
                            cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
-                cv2.putText(frame_right, countdown_text, (mid_width//2 - 50, height//2),
-                           cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
+                
+                # For AI mode, show countdown on right side only if not showing AI gesture yet
+                if self.game_mode_type == "pvp":
+                    cv2.putText(frame_right, countdown_text, (mid_width//2 - 50, height//2),
+                               cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
+                
+                # AI MODE: At 0.5 seconds remaining, AI makes choice
+                if self.game_mode_type == "ai" and remaining <= 0.5 and self.ai_gesture is None:
+                    gestures = ["Búa", "Giấy", "Kéo"]
+                    self.ai_gesture = random.choice(gestures)
+                    self.ai_gesture_time = time.time()
+                    print(f"🤖 AI selected: {self.ai_gesture}")
                 
                 self.game_window.update_status(f"Chuẩn bị... {countdown_text}", "#00FFFF")
             else:
-                # Capture and process logic (same as original)
-                if not self.capture_state['done']:
-                    self.capture_state['captured_frames']['left'] = clean_frame_left.copy()
-                    self.capture_state['captured_frames']['right'] = clean_frame_right.copy()
+                # Process captured frames - ISOLATED PROCESSING
+                if not hasattr(self, '_capture_done') and hasattr(self, '_frames_captured'):
                     
-                    with self.player1.lock:
-                        self.player1.prediction_buffer.clear()
-                    with self.player2.lock:
-                        self.player2.prediction_buffer.clear()
+                    # CLEAR BUFFERS để không bị contamination
+                    self.player1.clear_tracking_buffer()
+                    if self.game_mode_type == "pvp":
+                        self.player2.clear_tracking_buffer()
                     
-                    self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode)
-                    self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode)
+                    # Process ISOLATED - không dùng tracking thread
+                    print("🎯 Processing captured frames in ISOLATED mode...")
+                    pred_p1, landmarks_p1 = self.player1.process_single_frame_isolated(self._captured_frame_left)
                     
-                    self.capture_state['capture_time'] = time.time()
-                    self.capture_state['done'] = True
-                    self.capture_state['predictions_ready'] = False
+                    if self.game_mode_type == "ai":
+                        pred_p2 = self.ai_gesture
+                        landmarks_p2 = True  # Fake for AI
+                    else:
+                        pred_p2, landmarks_p2 = self.player2.process_single_frame_isolated(self._captured_frame_right)
+                    
+                    # Store results immediately
+                    self._pred_p1 = pred_p1
+                    self._pred_p2 = pred_p2
+                    self._landmarks_p1 = landmarks_p1
+                    self._landmarks_p2 = landmarks_p2
+                    
+                    self._capture_time = time.time()
+                    self._capture_done = True
+                    self._predictions_ready = True  # Already have predictions!
                 
-                processing_time = time.time() - self.capture_state['capture_time']
-                
-                if processing_time < 0.3:
-                    cv2.putText(frame_left, "PROCESSING...", (mid_width//2 - 200, height//2),
-                               cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 6)
-                    cv2.putText(frame_right, "PROCESSING...", (mid_width//2 - 200, height//2),
-                               cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 6)
+                # Check if we have predictions ready
+                if hasattr(self, '_predictions_ready') and self._predictions_ready:
+                    processing_time = time.time() - self._capture_time
                     
-                    self.game_window.update_status("Đang xử lý...", "#00FFFF")
+                    # Use isolated predictions (already processed)
+                    pred_p1 = self._pred_p1
+                    pred_p2 = self._pred_p2
+                    landmarks_p1 = self._landmarks_p1
+                    landmarks_p2 = self._landmarks_p2
                     
-                    self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode)
-                    self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode)
-                else:
-                    if not self.capture_state['predictions_ready']:
-                        results_p1 = self.player1.get_results()
-                        results_p2 = self.player2.get_results()
+                    # If detection failed, show message briefly
+                    if pred_p1 is None or pred_p2 is None:
+                        if processing_time < 1.0:
+                            if pred_p1 is None:
+                                cv2.putText(frame_left, "NO HAND DETECTED", (50, height//2),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 4)
+                            if pred_p2 is None and self.game_mode_type == "pvp":
+                                cv2.putText(frame_right, "NO HAND DETECTED", (50, height//2),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 4)
+                            self.game_window.update_status("Không phát hiện tay!", "#FF0000")
+                            return
                         
-                        pred_p1 = results_p1['prediction']
-                        pred_p2 = results_p2['prediction']
-                        landmarks_p1 = results_p1['landmarks']
-                        landmarks_p2 = results_p2['landmarks']
-                        
-                        if (pred_p1 is None or pred_p2 is None or 
-                            landmarks_p1 is None or landmarks_p2 is None):
-                            if processing_time < 2.0:
-                                if pred_p1 is None or landmarks_p1 is None:
-                                    cv2.putText(frame_left, "DETECTING...", (50, height//2),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 4)
-                                if pred_p2 is None or landmarks_p2 is None:
-                                    cv2.putText(frame_right, "DETECTING...", (50, height//2),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 4)
-                                
-                                self.game_window.update_status("Đang phát hiện...", "#FFA500")
-                                
-                                self.player1.update_frame(self.capture_state['captured_frames']['left'], self.game_mode)
-                                self.player2.update_frame(self.capture_state['captured_frames']['right'], self.game_mode)
-                                return
-                            else:
-                                pred_p1 = pred_p1 if pred_p1 else None
-                                pred_p2 = pred_p2 if pred_p2 else None
-                        
-                        # Store results
-                        captured_with_landmarks_left = self.capture_state['captured_frames']['left'].copy()
-                        captured_with_landmarks_right = self.capture_state['captured_frames']['right'].copy()
-                        
-                        if landmarks_p1:
-                            self.player1.mp_drawing.draw_landmarks(
-                                captured_with_landmarks_left, landmarks_p1, self.player1.mp_hands.HAND_CONNECTIONS,
-                                self.player1.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-                                self.player1.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
-                            )
+                    # Store results with landmarks
+                    captured_with_landmarks_left = self._captured_frame_left.copy()
+                    
+                    if landmarks_p1:
+                        self.player1.mp_drawing.draw_landmarks(
+                            captured_with_landmarks_left, landmarks_p1, self.player1.mp_hands.HAND_CONNECTIONS,
+                            self.player1.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                            self.player1.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
+                        )
+                    
+                    self.player1.captured_frame = self._captured_frame_left
+                    self.player1.captured_frame_with_landmarks = captured_with_landmarks_left
+                    self.player1.captured_gesture = pred_p1 if pred_p1 else "Không có tay"
+                    
+                    # Handle player 2 based on mode
+                    if self.game_mode_type == "pvp":
+                        captured_with_landmarks_right = self._captured_frame_right.copy()
                         if landmarks_p2:
                             self.player2.mp_drawing.draw_landmarks(
                                 captured_with_landmarks_right, landmarks_p2, self.player2.mp_hands.HAND_CONNECTIONS,
                                 self.player2.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
                                 self.player2.mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=2)
                             )
-                        
-                        self.player1.captured_frame = self.capture_state['captured_frames']['left']
-                        self.player2.captured_frame = self.capture_state['captured_frames']['right']
-                        self.player1.captured_frame_with_landmarks = captured_with_landmarks_left
+                        self.player2.captured_frame = self._captured_frame_right
                         self.player2.captured_frame_with_landmarks = captured_with_landmarks_right
-                        self.player1.captured_gesture = pred_p1 if pred_p1 else "Không có tay"
+                        self.player2.captured_gesture = pred_p2 if pred_p2 else "Không có tay"
+                    else:
+                        # AI mode - no captured frame for AI
                         self.player2.captured_gesture = pred_p2 if pred_p2 else "Không có tay"
 
-                        self.player1_final = pred_p1
-                        self.player2_final = pred_p2
-                        winner = determine_winner(self.player1_final, self.player2_final)
+                    self.player1_final = pred_p1
+                    self.player2_final = pred_p2
+                    winner = determine_winner(self.player1_final, self.player2_final)
 
-                        if winner == "p1":
-                            self.player1_score += 1
-                            self.result = f"{self.app_manager.player1_name} Thắng!"
-                            self.audio_manager.play_winner_sound("asset/result/player-1.mp3")
-                        elif winner == "p2":
-                            self.player2_score += 1
-                            self.result = f"{self.app_manager.player2_name} Thắng!"
-                            self.audio_manager.play_winner_sound("asset/result/player-2.mp3")
-                        elif winner == "draw":
-                            self.draws += 1
-                            self.result = "Hòa!"
-                            self.audio_manager.play_winner_sound("asset/result/tie.wav")
-                        else:
-                            self.result = "Không phát hiện tay!"
+                    if winner == "p1":
+                        self.player1_score += 1
+                        self.result = f"{self.app_manager.player1_name} Thắng!"
+                        self.audio_manager.play_winner_sound("asset/result/player-1.mp3")
+                    elif winner == "p2":
+                        self.player2_score += 1
+                        self.result = f"{self.app_manager.player2_name} Thắng!"
+                        self.audio_manager.play_winner_sound("asset/result/player-2.mp3")
+                    elif winner == "draw":
+                        self.draws += 1
+                        self.result = "Hòa!"
+                        self.audio_manager.play_winner_sound("asset/result/tie.wav")
+                    else:
+                        self.result = "Không phát hiện tay!"
 
-                        self.result_time = time.time()
-                        self.game_mode = "result"
-                        
-                        # Update GUI scores
-                        self.game_window.update_scores(self.player1_score, self.player2_score, self.draws)
-                        
-                        # Reset capture state for next round
-                        self.capture_state['done'] = False
-                        self.capture_state['predictions_ready'] = False
+                    self.result_time = time.time()
+                    self.game_mode = "result"
+                    
+                    # Update GUI scores
+                    self.game_window.update_scores(self.player1_score, self.player2_score, self.draws)
+                    
+                    delattr(self, '_capture_done')
+                    delattr(self, '_predictions_ready')
 
         elif self.game_mode == "result":
             # Draw current prediction below last round box for player 1
@@ -489,9 +573,14 @@ class RPSGameGUI:
 
         # Draw center line
         cv2.line(combined_frame, (mid_width, 0), (mid_width, height), (255, 255, 255), 2)
+        
+        # Draw FPS counter at top-left corner (small size)
+        fps_text = f"FPS: {self.current_fps:.1f}"
+        cv2.putText(combined_frame, fps_text, (10, 20),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
 
-        # Draw logo at center top (replacing FPT RPS text)
-        combined_frame = self.draw_logo(combined_frame, self.logo, position="top-center", max_height=80)
+        # Draw logo at center top (reduced size)
+        combined_frame = self.draw_logo(combined_frame, self.logo, position="top-center", max_height=40)
 
         # Display result text on video
         if self.result:
@@ -553,14 +642,24 @@ class RPSGameGUI:
             combined_frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
         # Update GUI with frame
+        before_gui = time.time()
         self.game_window.update_frame(combined_frame)
+        gui_time = time.time() - before_gui
+        
+        total_time = time.time() - frame_start
+        # Print timing once per second
+        if hasattr(self, '_last_debug_time') and time.time() - self._last_debug_time >= 1.0:
+            print(f"⏱️  Frame timing: Total={total_time*1000:.1f}ms | GUI={gui_time*1000:.1f}ms")
+            self._last_debug_time = time.time()
+        if not hasattr(self, '_last_debug_time'):
+            self._last_debug_time = time.time()
 
     def draw_captured_frame(self, frame, captured_frame, position="top-left", gesture_text=""):
         """Draw captured frame from previous round with icon"""
         if captured_frame is None:
             return frame
 
-        viz_size = 280  # Increased by 50% from original 187 (187 * 1.5 = 280)
+        viz_size = 100  # Reduced to 50% of original (200 -> 100)
         h, w = frame.shape[:2]
         margin = 10
 
@@ -571,18 +670,19 @@ class RPSGameGUI:
 
         viz_img = cv2.resize(captured_frame, (viz_size, viz_size))
 
-        # Draw white rectangle at bottom for text
-        cv2.rectangle(viz_img, (0, viz_size - 60), (viz_size, viz_size), (255, 255, 255), -1)
+        # Draw white rectangle at bottom for text (smaller area)
+        text_area_height = 25  # Smaller text area
+        cv2.rectangle(viz_img, (0, viz_size - text_area_height), (viz_size, viz_size), (255, 255, 255), -1)
 
         if gesture_text:
-            # Draw icon if gesture has one
-            icon_size = 45  # Increased for larger box
+            # Draw icon if gesture has one (smaller)
+            icon_size = 18  # Much smaller to not cover text
             if gesture_text in self.gesture_icons:
                 icon = self.gesture_icons[gesture_text]
                 icon_resized = cv2.resize(icon, (icon_size, icon_size))
                 
-                icon_x = 8
-                icon_y = viz_size - 52
+                icon_x = 3
+                icon_y = viz_size - text_area_height + 3  # Position at top of text area
                 
                 # Handle transparency for icon overlay
                 if icon_resized.shape[2] == 4:  # Has alpha channel
@@ -601,22 +701,14 @@ class RPSGameGUI:
             draw = ImageDraw.Draw(pil_img)
             
             try:
-                font_small = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 16)
-                font_medium = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 20)
+                font_gesture = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 12)
             except:
-                font_small = ImageFont.load_default()
-                font_medium = ImageFont.load_default()
+                font_gesture = ImageFont.load_default()
             
-            # Calculate centered text position for label
-            label_bbox = draw.textbbox((0, 0), "Lượt trước:", font=font_small)
-            label_width = label_bbox[2] - label_bbox[0]
-            label_x = (viz_size - label_width) // 2
-            
-            draw.text((label_x, viz_size - 54), "Lượt trước:", font=font_small, fill=(0, 0, 0))
-            
-            # Draw gesture text next to icon
-            text_x = icon_size + 15 if gesture_text in self.gesture_icons else 8
-            draw.text((text_x, viz_size - 28), gesture_text, font=font_medium, fill=(0, 150, 0))
+            # Draw gesture text next to icon, centered vertically in text area
+            text_x = icon_size + 6 if gesture_text in self.gesture_icons else 3
+            text_y = viz_size - text_area_height + 5
+            draw.text((text_x, text_y), gesture_text, font=font_gesture, fill=(0, 120, 0))
             
             viz_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
@@ -642,11 +734,11 @@ class RPSGameGUI:
 
         logo_resized = cv2.resize(logo_img, (new_width, new_height))
 
-        # Box dimensions with padding
-        padding = 12
+        # Box dimensions with padding (reduced)
+        padding = 6  # Reduced to 50% (12 -> 6)
         box_width = new_width + (padding * 2)
         box_height = new_height + (padding * 2)
-        radius = 15  # Rounded corner radius
+        radius = 8  # Reduced to ~50% (15 -> 8)
 
         if position == "top-center":
             box_x = (w - box_width) // 2
@@ -704,13 +796,24 @@ class RPSGameGUI:
             self.game_mode = "countdown"
             self.countdown_start = time.time()
             self.result = ""
+            
+            # Reset capture flags for new round
+            for attr in ['_frames_captured', '_capture_done', '_predictions_ready', 
+                        '_pred_p1', '_pred_p2', '_landmarks_p1', '_landmarks_p2', 
+                        '_capture_time', '_captured_frame_left', '_captured_frame_right']:
+                if hasattr(self, attr):
+                    delattr(self, attr)
+            
+            # Reset AI gesture for new round
+            self.ai_gesture = None
+            self.ai_gesture_time = None
             # Play countdown sound and fade background music
             self.audio_manager.play_countdown_sound()
         elif key == Qt.Key_R:
             # Reset scores only
             self.reset_scores()
-        elif key == Qt.Key_N:
-            # Restart game with new names
+        elif key == Qt.Key_Escape:
+            # Return to game mode selection
             self.restart_game()
         elif key == Qt.Key_F11:
             # Toggle fullscreen
@@ -786,10 +889,10 @@ class RPSGameGUI:
 def main():
     """Main function to run the GUI game"""
     # Configuration
-    MODEL_PATH = "model/rps_ridge_model.joblib"
-    SCALER_PATH = "model/rps_scaler.joblib"
-    CAMERA_WIDTH = 1280
-    CAMERA_HEIGHT = 720
+    MODEL_PATH = "model/LogisticReg_model.joblib"
+    SCALER_PATH = "model/LogisticReg_scaler.joblib"
+    CAMERA_WIDTH = 640
+    CAMERA_HEIGHT = 480
     COUNTDOWN_DURATION = 3
     
     print("🎮 Rock Paper Scissors - PyQt5 GUI Version")

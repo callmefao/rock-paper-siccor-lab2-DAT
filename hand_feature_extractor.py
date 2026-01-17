@@ -13,7 +13,8 @@ class HandFeatureExtractor:
     """Class for extracting hand landmarks and features using MediaPipe"""
 
     def __init__(self, static_image_mode=True, max_num_hands=1,
-                 min_detection_confidence=0.3, min_tracking_confidence=0.3):
+                 min_detection_confidence=0.3, min_tracking_confidence=0.3,
+                 processing_scale=0.5):
         """
         Initialize MediaPipe Hands
 
@@ -22,7 +23,9 @@ class HandFeatureExtractor:
             max_num_hands: Maximum number of hands to detect
             min_detection_confidence: Minimum confidence for hand detection
             min_tracking_confidence: Minimum confidence for hand tracking
+            processing_scale: Scale factor for frame processing (0.5 = half resolution for 2x speed)
         """
+        self.processing_scale = processing_scale
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
         self.hands = self.mp_hands.Hands(
@@ -35,6 +38,24 @@ class HandFeatureExtractor:
     def close(self):
         """Close MediaPipe Hands"""
         self.hands.close()
+    
+    def process_frame(self, frame):
+        """
+        Process frame with automatic downscaling for performance
+        
+        Args:
+            frame: BGR image from camera
+            
+        Returns:
+            MediaPipe results object
+        """
+        # Downscale for faster processing
+        h, w = frame.shape[:2]
+        small_frame = cv2.resize(frame, (int(w * self.processing_scale), int(h * self.processing_scale)))
+        
+        # Convert to RGB and process
+        image_rgb = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+        return self.hands.process(image_rgb)
 
     @staticmethod
     def calculate_distance(p1, p2):
