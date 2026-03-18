@@ -1,0 +1,44 @@
+{
+    "camera": {
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+        "buffer_size": 1
+    },
+    "game": {
+        "countdown_duration": 3,
+        "result_display_time": 3,
+        "target_fps": 30
+    },
+    "mediapipe": {
+        "min_detection_confidence": 0.3,
+        "min_tracking_confidence": 0.3,
+        "processing_scale": 0.75,
+        "capture_processing_scale": 1.0,
+        "multi_threshold_values": [0.15, 0.20, 0.25, 0.30]
+    },
+    "prediction": {
+        "buffer_size": 5,
+        "stability_threshold": 0.6
+    },
+    "ai_strategy": {
+        "default_mode": "random",
+        "cheat_threshold": 3,
+        "auto_balance": {
+            "enabled": true,
+            "target_win_rate": 0.5,
+            "check_interval": 5,
+            "min_games_before_balance": 3
+        },
+        "admin_hotkey": "C"
+    },
+    "model": {
+        "model_path": "model/rps_ridge_model.joblib",
+        "scaler_path": "model/rps_scaler.joblib"
+    },
+    "ui": {
+        "show_admin_indicator": true,
+        "admin_indicator_size": "small",
+        "logo_max_height": 40
+    }
+}

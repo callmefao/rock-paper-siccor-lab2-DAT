@@ -6,6 +6,7 @@ import numpy as np
 import sys
 import time
 import random
+import json
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication
 from joblib import load
@@ -21,35 +22,67 @@ from main import Player, determine_winner, play_sound
 
 
 # =====================================
+# Config Loader
+# =====================================
+def load_config(config_path="config.json"):
+    """Load configuration from JSON file"""
+    default_config = {
+        "camera": {"width": 640, "height": 480, "fps": 30, "buffer_size": 1},
+        "game": {"countdown_duration": 3, "result_display_time": 3, "target_fps": 30},
+        "mediapipe": {"min_detection_confidence": 0.3, "min_tracking_confidence": 0.3, "processing_scale": 0.75},
+        "ai_strategy": {
+            "default_mode": "random",
+            "cheat_threshold": 3,
+            "auto_balance": {"enabled": True, "target_win_rate": 0.5, "check_interval": 5, "min_games_before_balance": 3},
+            "admin_hotkey": "C"
+        },
+        "model": {"model_path": "model/rps_ridge_model.joblib", "scaler_path": "model/rps_scaler.joblib"},
+        "ui": {"show_admin_indicator": True, "admin_indicator_size": "small", "logo_max_height": 40}
+    }
+
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            print(f"✓ Config loaded from {config_path}")
+            return config
+    except FileNotFoundError:
+        print(f"⚠ Config file not found, using defaults")
+        return default_config
+    except json.JSONDecodeError as e:
+        print(f"⚠ Config JSON error: {e}, using defaults")
+        return default_config
+
+
+# =====================================
 # Enhanced RPSGame with PyQt5 Integration
 # =====================================
 class RPSGameGUI:
     """Main game class with PyQt5 GUI integration"""
 
-    def __init__(self, app_manager, model_path, scaler_path, camera_width=1280, camera_height=720, countdown_duration=3):
+    def __init__(self, app_manager, config):
         """
-        Initialize game with model, scaler, and GUI
+        Initialize game with config
 
         Args:
             app_manager: RPSApplication instance
-            model_path: Path to trained model
-            scaler_path: Path to feature scaler
-            camera_width: Width of camera capture
-            camera_height: Height of camera capture
-            countdown_duration: Duration of countdown in seconds
+            config: Configuration dictionary loaded from config.json
         """
         self.app_manager = app_manager
-        self.audio_manager = app_manager.audio_manager  # Store audio manager reference
+        self.audio_manager = app_manager.audio_manager
         self.game_mode_type = app_manager.game_mode  # "ai" or "pvp"
-        
-        # Load trained model and scaler
+        self.config = config
+
+        # Load trained model and scaler from config
+        model_path = config["model"]["model_path"]
+        scaler_path = config["model"]["scaler_path"]
         self.model = load(model_path)
         self.scaler = load(scaler_path)
 
-        # Game configuration
-        self.camera_width = camera_width
-        self.camera_height = camera_height
-        self.countdown_duration = countdown_duration
+        # Game configuration from config
+        self.camera_width = config["camera"]["width"]
+        self.camera_height = config["camera"]["height"]
+        self.countdown_duration = config["game"]["countdown_duration"]
+        self.result_display_time = config["game"]["result_display_time"]
         
         # FPS tracking
         self.fps_counter = 0
@@ -75,7 +108,7 @@ class RPSGameGUI:
         self.gesture_icons = {}
         icon_paths = {
             "Búa": "asset/icons/rock-icon.png",
-            "Giấy": "asset/icons/paper-icon.png",
+            "Bao": "asset/icons/paper-icon.png",
             "Kéo": "asset/icons/scissors-icon.png"
         }
         for gesture, path in icon_paths.items():
@@ -111,6 +144,28 @@ class RPSGameGUI:
         # AI player state
         self.ai_gesture = None
         self.ai_gesture_time = None
+
+        # AI Strategy settings from config
+        ai_config = config["ai_strategy"]
+        self.ai_mode = ai_config["default_mode"]  # "random", "cheat", "adaptive"
+        self.ai_cheat_threshold = ai_config["cheat_threshold"]
+        self.ai_admin_hotkey = ai_config["admin_hotkey"]
+
+        # Auto-balance settings
+        auto_balance = ai_config["auto_balance"]
+        self.ai_auto_balance_enabled = auto_balance["enabled"]
+        self.ai_target_win_rate = auto_balance["target_win_rate"]
+        self.ai_check_interval = auto_balance["check_interval"]
+        self.ai_min_games = auto_balance["min_games_before_balance"]
+
+        # AI tracking stats
+        self.ai_consecutive_losses = 0
+        self.ai_player_history = []
+        self.ai_total_games = 0
+        self.ai_wins = 0
+
+        # UI settings
+        self.show_admin_indicator = config["ui"]["show_admin_indicator"]
             
         # GUI window
         self.game_window = None
@@ -138,7 +193,7 @@ class RPSGameGUI:
         # Frame timer for consistent FPS
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
-        self.target_fps = 30
+        self.target_fps = config["game"]["target_fps"]
         self.timer_interval = int(1000 / self.target_fps)  # milliseconds
         print(f"⏱️  Timer configured: {self.timer_interval}ms interval (target: {self.target_fps} FPS)")
     
@@ -162,6 +217,98 @@ class RPSGameGUI:
         self.font_cache['small'] = ImageFont.load_default()
         self.font_cache['medium'] = ImageFont.load_default()
         self.font_cache['large'] = ImageFont.load_default()
+
+    def _ai_choose_gesture(self, player_gesture):
+        """
+        AI chọn gesture - CƠ CẤU mode
+
+        Args:
+            player_gesture: Gesture mà player đã ra (đã detect được)
+
+        Returns:
+            AI's gesture (counter để thắng, hoặc random)
+        """
+        win_counters = {"Búa": "Bao", "Bao": "Kéo", "Kéo": "Búa"}
+        gestures = ["Búa", "Bao", "Kéo"]
+
+        # Lưu lịch sử player
+        if player_gesture:
+            self.ai_player_history.append(player_gesture)
+
+        # Nếu không detect được tay player → random
+        if player_gesture is None:
+            return random.choice(gestures)
+
+        # Check auto-balance first
+        if self.ai_auto_balance_enabled:
+            self._ai_auto_balance()
+
+        # MODE: "random" - công bằng hoàn toàn
+        if self.ai_mode == "random":
+            return random.choice(gestures)
+
+        # MODE: "cheat" - luôn thắng (100%)
+        if self.ai_mode == "cheat":
+            return win_counters[player_gesture]
+
+        # Default: random
+        return random.choice(gestures)
+
+    def _ai_auto_balance(self):
+        """Tự động điều chỉnh mode để cân bằng tỷ lệ thắng"""
+        if self.ai_total_games < self.ai_min_games:
+            return  # Chưa đủ games để đánh giá
+
+        if self.ai_total_games % self.ai_check_interval != 0:
+            return  # Chỉ check theo interval
+
+        # Tính win rate của AI
+        ai_win_rate = self.ai_wins / self.ai_total_games if self.ai_total_games > 0 else 0.5
+        old_mode = self.ai_mode
+
+        # Điều chỉnh mode (chỉ random và cheat)
+        if ai_win_rate > self.ai_target_win_rate + 0.15:
+            # AI thắng quá nhiều → chuyển sang random
+            if self.ai_mode != "random":
+                self.ai_mode = "random"
+                print(f"⚖️ Auto-balance: AI winning too much ({ai_win_rate:.0%}), switching to RANDOM")
+        elif ai_win_rate < self.ai_target_win_rate - 0.15:
+            # AI thua quá nhiều → chuyển sang cheat
+            if self.ai_mode != "cheat":
+                self.ai_mode = "cheat"
+                print(f"⚖️ Auto-balance: AI losing ({ai_win_rate:.0%}), switching to CHEAT")
+
+        # Update indicator if mode changed
+        if old_mode != self.ai_mode and self.game_window:
+            self.game_window.update_mode_indicator(self.ai_mode)
+
+    def _ai_update_stats(self, winner):
+        """Cập nhật stats sau mỗi trận"""
+        self.ai_total_games += 1
+
+        if winner == "p1":  # Player thắng = AI thua
+            self.ai_consecutive_losses += 1
+        elif winner == "p2":  # AI thắng
+            self.ai_consecutive_losses = 0
+            self.ai_wins += 1
+        # Draw: không đổi gì
+
+    def _ai_toggle_mode(self):
+        """Toggle AI mode (cho admin hotkey) - chỉ random và cheat"""
+        modes = ["random", "cheat"]
+        current_idx = modes.index(self.ai_mode) if self.ai_mode in modes else 0
+        next_idx = (current_idx + 1) % len(modes)
+        self.ai_mode = modes[next_idx]
+        print(f"🎮 AI mode toggled to: {self.ai_mode.upper()}")
+
+        # Update logo color indicator
+        if self.game_window:
+            self.game_window.update_mode_indicator(self.ai_mode)
+
+    def draw_admin_indicator(self, frame):
+        """Draw admin indicator - DISABLED, using logo color instead"""
+        # Indicator is now shown via logo color change in UI
+        return frame
     
     def draw_text_vietnamese(self, frame, text, position, font_size='medium', color=(255, 255, 255)):
         """Draw Vietnamese text on frame using PIL"""
@@ -293,7 +440,11 @@ class RPSGameGUI:
         
         # Connect keyboard events
         self.game_window.keyPressEvent = self.handle_key_press
-        
+
+        # Set initial mode indicator (for AI mode)
+        if self.game_mode_type == "ai":
+            self.game_window.update_mode_indicator(self.ai_mode)
+
         # Start frame update timer
         self.timer.start(self.timer_interval)
         
@@ -341,7 +492,7 @@ class RPSGameGUI:
                 bot_img = self.bot_images.get("rule")
             elif self.ai_gesture:
                 # Show AI's choice
-                gesture_map = {"Búa": "rock", "Giấy": "paper", "Kéo": "scissors"}
+                gesture_map = {"Búa": "rock", "Bao": "paper", "Kéo": "scissors"}
                 img_key = gesture_map.get(self.ai_gesture, "rule")
                 bot_img = self.bot_images.get(img_key)
             else:
@@ -408,12 +559,12 @@ class RPSGameGUI:
             elapsed = time.time() - self.countdown_start
             remaining = self.countdown_duration - elapsed
 
-            # CAPTURE frame ONCE when countdown hits 0 (before processing)
-            if remaining <= 0 and not hasattr(self, '_frames_captured'):
+            # CAPTURE SINGLE FRAME at t=0 (allows last-second hand changes)
+            if remaining <= 0 and not hasattr(self, '_frame_captured'):
                 self._captured_frame_left = clean_frame_left.copy()
                 self._captured_frame_right = clean_frame_right.copy()
-                self._frames_captured = True
-                print("📸 Frames captured at countdown=0")
+                self._frame_captured = True
+                print("📸 Single frame captured at countdown=0 (will process 3x for accuracy)")
 
             if remaining > 0:
                 countdown_text = str(int(remaining) + 1)
@@ -426,32 +577,31 @@ class RPSGameGUI:
                     cv2.putText(frame_right, countdown_text, (mid_width//2 - 50, height//2),
                                cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 8)
                 
-                # AI MODE: At 0.5 seconds remaining, AI makes choice
-                if self.game_mode_type == "ai" and remaining <= 0.5 and self.ai_gesture is None:
-                    gestures = ["Búa", "Giấy", "Kéo"]
-                    self.ai_gesture = random.choice(gestures)
-                    self.ai_gesture_time = time.time()
-                    print(f"🤖 AI selected: {self.ai_gesture}")
+                # AI MODE: AI will choose AFTER seeing player's gesture (cheat mode)
                 
                 self.game_window.update_status(f"Chuẩn bị... {countdown_text}", "#00FFFF")
             else:
-                # Process captured frames - ISOLATED PROCESSING
-                if not hasattr(self, '_capture_done') and hasattr(self, '_frames_captured'):
+                # Process captured frame - TRIPLE PROCESSING with VOTING for maximum accuracy
+                if not hasattr(self, '_capture_done') and hasattr(self, '_frame_captured'):
                     
                     # CLEAR BUFFERS để không bị contamination
                     self.player1.clear_tracking_buffer()
                     if self.game_mode_type == "pvp":
                         self.player2.clear_tracking_buffer()
                     
-                    # Process ISOLATED - không dùng tracking thread
-                    print("🎯 Processing captured frames in ISOLATED mode...")
-                    pred_p1, landmarks_p1 = self.player1.process_single_frame_isolated(self._captured_frame_left)
-                    
+                    # Process SAME FRAME 3 TIMES with different thresholds - highest accuracy!
+                    print("🎯 Processing single frame 3x with different thresholds for maximum accuracy...")
+                    pred_p1, landmarks_p1 = self.player1.process_single_frame_triple(self._captured_frame_left)
+
                     if self.game_mode_type == "ai":
+                        # AI "CƠ CẤU": Chọn gesture SAU KHI biết player ra gì
+                        self.ai_gesture = self._ai_choose_gesture(pred_p1)
+                        self.ai_gesture_time = time.time()
+                        print(f"🤖 AI counter-picked: {self.ai_gesture} (vs player's {pred_p1})")
                         pred_p2 = self.ai_gesture
                         landmarks_p2 = True  # Fake for AI
                     else:
-                        pred_p2, landmarks_p2 = self.player2.process_single_frame_isolated(self._captured_frame_right)
+                        pred_p2, landmarks_p2 = self.player2.process_single_frame_triple(self._captured_frame_right)
                     
                     # Store results immediately
                     self._pred_p1 = pred_p1
@@ -518,6 +668,10 @@ class RPSGameGUI:
                     self.player1_final = pred_p1
                     self.player2_final = pred_p2
                     winner = determine_winner(self.player1_final, self.player2_final)
+
+                    # Update AI stats for adaptive mode
+                    if self.game_mode_type == "ai":
+                        self._ai_update_stats(winner)
 
                     if winner == "p1":
                         self.player1_score += 1
@@ -640,6 +794,9 @@ class RPSGameGUI:
             
             # Convert back to OpenCV format
             combined_frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+        # Draw admin indicator for AI mode
+        combined_frame = self.draw_admin_indicator(combined_frame)
 
         # Update GUI with frame
         before_gui = time.time()
@@ -798,7 +955,7 @@ class RPSGameGUI:
             self.result = ""
             
             # Reset capture flags for new round
-            for attr in ['_frames_captured', '_capture_done', '_predictions_ready', 
+            for attr in ['_frame_captured', '_capture_done', '_predictions_ready', 
                         '_pred_p1', '_pred_p2', '_landmarks_p1', '_landmarks_p2', 
                         '_capture_time', '_captured_frame_left', '_captured_frame_right']:
                 if hasattr(self, attr):
@@ -821,6 +978,9 @@ class RPSGameGUI:
                 self.game_window.showNormal()
             else:
                 self.game_window.showFullScreen()
+        elif key == Qt.Key_C and self.game_mode_type == "ai":
+            # Admin hotkey: Toggle AI mode (C key) - subtle, no status message
+            self._ai_toggle_mode()
 
     def reset_scores(self):
         """Reset scores only"""
@@ -831,7 +991,15 @@ class RPSGameGUI:
         self.player1_score = 0
         self.player2_score = 0
         self.draws = 0
-        
+
+        # Reset AI stats
+        self.ai_consecutive_losses = 0
+        self.ai_player_history = []
+        self.ai_total_games = 0
+        self.ai_wins = 0
+        # Reset AI mode to default from config
+        self.ai_mode = self.config["ai_strategy"]["default_mode"]
+
         if self.game_window:
             self.game_window.update_scores(0, 0, 0)
             self.game_window.update_status("Điểm đã được reset!", "#FFD700")
@@ -888,42 +1056,39 @@ class RPSGameGUI:
 # =====================================
 def main():
     """Main function to run the GUI game"""
-    # Configuration
-    MODEL_PATH = "model/LogisticReg_model.joblib"
-    SCALER_PATH = "model/LogisticReg_scaler.joblib"
-    CAMERA_WIDTH = 640
-    CAMERA_HEIGHT = 480
-    COUNTDOWN_DURATION = 3
-    
+    # Load configuration from file
+    config = load_config("config.json")
+
     print("🎮 Rock Paper Scissors - PyQt5 GUI Version")
     print("=" * 50)
-    
+    print(f"📋 Config loaded: Camera {config['camera']['width']}x{config['camera']['height']}")
+    print(f"🤖 AI default mode: {config['ai_strategy']['default_mode']}")
+
     # Create application
     app_manager = RPSApplication()
-    
+
     # Create game instance
     game = None
-    
+
     def on_loading_complete():
         """Initialize game after loading"""
         nonlocal game
-        game = RPSGameGUI(app_manager, MODEL_PATH, SCALER_PATH, 
-                         CAMERA_WIDTH, CAMERA_HEIGHT, COUNTDOWN_DURATION)
+        game = RPSGameGUI(app_manager, config)
         game.initialize()
-    
+
     # Connect loading complete signal
     app_manager.on_loading_complete = on_loading_complete
-    
+
     # Start application
     app_manager.start()
-    
+
     # Run event loop
     exit_code = app_manager.exec()
-    
+
     # Cleanup
     if game:
         game.cleanup()
-    
+
     sys.exit(exit_code)
 
 

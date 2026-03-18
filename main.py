@@ -42,6 +42,40 @@ def play_sound(audio_file):
 
 
 # =====================================
+# Hand Orientation Normalization
+# =====================================
+def normalize_hand_orientation(landmarks):
+    """
+    Normalize hand orientation to match training data (hand pointing up)
+    OPTIMIZED: Use vectorized operations for 5-10x speedup
+    """
+    wrist = landmarks[0]
+    middle_mcp = landmarks[9]
+
+    hand_vector = middle_mcp - wrist
+    hand_vector_2d = hand_vector[:2]
+
+    current_angle = np.arctan2(hand_vector_2d[0], -hand_vector_2d[1])
+
+    cos_angle = np.cos(-current_angle)
+    sin_angle = np.sin(-current_angle)
+    rotation_matrix_2d = np.array([
+        [cos_angle, -sin_angle],
+        [sin_angle, cos_angle]
+    ])
+
+    # OPTIMIZED: Vectorized rotation for all points at once
+    rotated_landmarks = landmarks.copy()
+    points_2d = landmarks[:, :2] - wrist[:2]  # Center all points at once
+    rotated_points_2d = points_2d @ rotation_matrix_2d.T  # Vectorized rotation
+    rotated_landmarks[:, :2] = rotated_points_2d + wrist[:2]  # Translate back
+    # Keep z-coordinate unchanged
+    rotated_landmarks[:, 2] = landmarks[:, 2]
+
+    return rotated_landmarks
+
+
+# =====================================
 # Player class with separate Mediapipe instance
 # =====================================
 class Player:
@@ -57,9 +91,9 @@ class Player:
         self.feature_extractor = HandFeatureExtractor(
             static_image_mode=False,
             max_num_hands=1,
-            min_detection_confidence=0.7,  # Higher for more stable detection
-            min_tracking_confidence=0.6,   # Higher to reduce noise
-            processing_scale=0.5  # Process at 50% resolution for 2x speed boost
+            min_detection_confidence=0.3,  # Lower threshold for better detection
+            min_tracking_confidence=0.3,   # Lower threshold for smoother tracking
+            processing_scale=0.75  # Process at 75% resolution for better quality
         )
 
         # For drawing landmarks
@@ -72,7 +106,7 @@ class Player:
         self.features = None
         self.landmarks = None  # For drawing
         self.prediction = None
-        self.prediction_buffer = deque(maxlen=3)  # Smaller buffer for faster response
+        self.prediction_buffer = deque(maxlen=5)  # Larger buffer for more stable predictions
         self.captured_frame = None  # Store captured frame from previous round
         self.captured_gesture = None  # Store captured gesture from previous round
         self.captured_frame_with_landmarks = None  # Store frame WITH MediaPipe drawing
@@ -126,9 +160,9 @@ class Player:
         isolated_extractor = HandFeatureExtractor(
             static_image_mode=True,  # STATIC mode - no tracking!
             max_num_hands=1,
-            min_detection_confidence=0.6,  # Balanced threshold for reliable static detection
-            min_tracking_confidence=0.5,   # Not used in static mode
-            processing_scale=0.5  # Process at 50% resolution for speed
+            min_detection_confidence=0.25,  # VERY LOW for maximum detection
+            min_tracking_confidence=0.25,   # Not used in static mode
+            processing_scale=1.0  # Process at FULL resolution for best accuracy
         )
         
         try:
@@ -143,8 +177,11 @@ class Player:
             # Extract landmarks
             landmarks_array = np.array([[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark])
             
-            # Extract features directly (no normalization needed with new model)
-            features = isolated_extractor.extract_features_from_landmarks(landmarks_array)
+            # Normalize hand orientation before feature extraction
+            normalized_landmarks = normalize_hand_orientation(landmarks_array)
+            
+            # Extract features from normalized landmarks
+            features = isolated_extractor.extract_features_from_landmarks(normalized_landmarks)
             
             if features is None:
                 return None, None
@@ -152,7 +189,7 @@ class Player:
             # Predict directly
             features_scaled = self.scaler.transform([features])
             prediction_idx = self.model.predict(features_scaled)[0]
-            labels = {0: "Búa", 1: "Giấy", 2: "Kéo"}
+            labels = {0: "Búa", 1: "Bao", 2: "Kéo"}
             prediction = labels[prediction_idx]
             
             return prediction, hand_landmarks
@@ -160,6 +197,93 @@ class Player:
         finally:
             # Clean up isolated instance
             isolated_extractor.close()
+    
+    def process_single_frame_triple(self, frame):
+        """Process SAME frame MULTIPLE times with different thresholds and vote
+        This maximizes accuracy for a single capture frame
+        
+        Args:
+            frame: Single frame to process
+            
+        Returns:
+            (best_prediction, best_landmarks) - voted result from multiple processing runs
+        """
+        predictions = []
+        landmarks_list = []
+        
+        # Process the SAME frame 4 times with different confidence thresholds
+        # This diversification increases robustness against borderline detections
+        thresholds = [
+            0.15,  # Very permissive - catches hard-to-detect hands
+            0.20,  # Permissive
+            0.25,  # Balanced - current setting
+            0.30,  # Stricter - only confident detections
+        ]
+        
+        for threshold in thresholds:
+            isolated_extractor = HandFeatureExtractor(
+                static_image_mode=True,
+                max_num_hands=1,
+                min_detection_confidence=threshold,
+                min_tracking_confidence=threshold,
+                processing_scale=1.0  # Always full resolution for maximum accuracy
+            )
+            
+            try:
+                # Process with this threshold
+                results = isolated_extractor.process_frame(frame)
+                
+                if not results.multi_hand_landmarks:
+                    continue
+                
+                hand_landmarks = results.multi_hand_landmarks[0]
+                landmarks_array = np.array([[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark])
+                normalized_landmarks = normalize_hand_orientation(landmarks_array)
+                features = isolated_extractor.extract_features_from_landmarks(normalized_landmarks)
+                
+                if features is None:
+                    continue
+                
+                # Predict
+                features_scaled = self.scaler.transform([features])
+                prediction_idx = self.model.predict(features_scaled)[0]
+                labels = {0: "Búa", 1: "Bao", 2: "Kéo"}
+                prediction = labels[prediction_idx]
+                
+                predictions.append(prediction)
+                landmarks_list.append(hand_landmarks)
+                
+            finally:
+                isolated_extractor.close()
+        
+        # If no valid predictions, return None
+        if not predictions:
+            return None, None
+        
+        # Enhanced voting logic
+        from collections import Counter
+        vote_counts = Counter(predictions)
+        
+        # If we have unanimous or strong majority (3+/4), use that
+        if len(predictions) >= 3:
+            most_common_pred, count = vote_counts.most_common(1)[0]
+            if count >= 3:  # At least 3/4 agree
+                best_prediction = most_common_pred
+            else:
+                # No strong majority - prioritize stricter thresholds
+                # If predictions disagree, trust the higher confidence detections
+                best_prediction = predictions[-1] if len(predictions) == 4 else vote_counts.most_common(1)[0][0]
+        else:
+            # Less than 3 predictions - use majority
+            best_prediction = vote_counts.most_common(1)[0][0]
+        
+        # Return the landmarks from the first occurrence of best prediction
+        best_idx = predictions.index(best_prediction)
+        best_landmarks = landmarks_list[best_idx]
+        
+        print(f"Player {self.player_id}: Multi-threshold vote: {predictions} → {best_prediction}")
+        
+        return best_prediction, best_landmarks
 
     def _process_loop(self):
         """Main processing loop running in separate thread - OPTIMIZED"""
@@ -221,8 +345,11 @@ class Player:
         # Extract landmarks as numpy array
         landmarks_array = np.array([[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark])
 
-        # Extract features directly (no normalization needed with new model)
-        features = self.feature_extractor.extract_features_from_landmarks(landmarks_array)
+        # Normalize hand orientation before feature extraction
+        normalized_landmarks = normalize_hand_orientation(landmarks_array)
+
+        # Extract features from normalized landmarks
+        features = self.feature_extractor.extract_features_from_landmarks(normalized_landmarks)
 
         return features, hand_landmarks  # Return both features and landmarks for drawing
 
@@ -234,7 +361,7 @@ class Player:
         features_scaled = self.scaler.transform([features])
         prediction = self.model.predict(features_scaled)[0]
 
-        labels = {0: "Búa", 1: "Giấy", 2: "Kéo"}
+        labels = {0: "Búa", 1: "Bao", 2: "Kéo"}
         return labels[prediction]
 
     def _get_smoothed_prediction(self):
@@ -252,8 +379,8 @@ class Player:
         # Get the most common prediction
         most_common_pred, most_common_count = counts.most_common(1)[0]
         
-        # Require at least 50% consistency (2/3 frames) for faster response
-        threshold = max(2, len(self.prediction_buffer) * 0.5)
+        # Require at least 60% consistency (3/5 frames) for stable predictions
+        threshold = max(3, len(self.prediction_buffer) * 0.6)
         if most_common_count >= threshold:
             return most_common_pred
         
@@ -365,11 +492,11 @@ def determine_winner(player1_gesture, player2_gesture):
 
     win_conditions = {
         ("Búa", "Kéo"): "p1",
-        ("Kéo", "Giấy"): "p1",
-        ("Giấy", "Búa"): "p1",
+        ("Kéo", "Bao"): "p1",
+        ("Bao", "Búa"): "p1",
         ("Kéo", "Búa"): "p2",
-        ("Giấy", "Kéo"): "p2",
-        ("Búa", "Giấy"): "p2"
+        ("Bao", "Kéo"): "p2",
+        ("Búa", "Bao"): "p2"
     }
 
     return win_conditions.get((player1_gesture, player2_gesture), None)

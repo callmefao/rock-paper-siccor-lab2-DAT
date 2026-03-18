@@ -792,6 +792,7 @@ class GameWindow(QMainWindow):
                 font-weight: bold;
             }
         """)
+        self.logo_label = logo_label  # Store reference for mode indicator
         center_layout.addWidget(logo_label)
         
         self.draws_label = QLabel("Hòa: 0")
@@ -920,6 +921,22 @@ class GameWindow(QMainWindow):
             QLabel {{
                 color: {color};
                 font-size: 16px;
+                font-weight: bold;
+            }}
+        """)
+
+    def update_mode_indicator(self, mode):
+        """Update logo color based on AI mode (subtle indicator for admin)"""
+        # Mode colors - only random and cheat
+        mode_colors = {
+            "random": "#00FF00",    # Green - fair mode
+            "cheat": "#FF6B6B"      # Soft red - cheat mode
+        }
+        color = mode_colors.get(mode, "#FFD700")
+        self.logo_label.setStyleSheet(f"""
+            QLabel {{
+                color: {color};
+                font-size: 18px;
                 font-weight: bold;
             }}
         """)
